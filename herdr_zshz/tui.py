@@ -257,6 +257,7 @@ class PickerApp(App[Result | None]):
         self.preview_lines: list[str] = []
         self._preview_path = ""
         self._preview_cache: dict[str, list[str]] = {}
+        self._preview_generation = 0
 
     def compose(self) -> ComposeResult:
         yield Static("", id="title")
@@ -403,6 +404,8 @@ class PickerApp(App[Result | None]):
     def invalidate_previews(self) -> None:
         self._preview_cache.clear()
         self._preview_path = ""
+        # Workers started before this point would cache data we just dropped.
+        self._preview_generation += 1
 
     def update_preview(self) -> None:
         preview = self.query_one("#preview", Static)
@@ -415,6 +418,7 @@ class PickerApp(App[Result | None]):
 
     @work(exclusive=True, thread=True)
     def load_preview(self, path: str) -> None:
+        generation = self._preview_generation
         try:
             workspaces = self.herdr.workspaces()
             panes = self.herdr.panes()
@@ -477,11 +481,13 @@ class PickerApp(App[Result | None]):
                 if subject:
                     lines.append(f"last: {subject}")
         try:
-            self.call_from_thread(self._preview_loaded, path, lines)
+            self.call_from_thread(self._preview_loaded, path, lines, generation)
         except Exception:  # noqa: BLE001 - app may have exited already
             pass
 
-    def _preview_loaded(self, path: str, lines: list[str]) -> None:
+    def _preview_loaded(self, path: str, lines: list[str], generation: int) -> None:
+        if generation != self._preview_generation:
+            return
         self._preview_cache[path] = lines
         if path != self._preview_path:
             return

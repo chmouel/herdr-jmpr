@@ -344,6 +344,20 @@ class CloseTest(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertIn("open: w1", app.preview_lines)
 
+    async def test_preview_from_before_invalidation_is_not_cached(self):
+        herdr = FakeHerdr(workspaces=[], panes=[])
+        app = self.app(herdr)
+        async with app.run_test(size=(120, 40)) as pilot:
+            self.assertTrue(await self.wait_for_preview(app, pilot, "open: no"))
+            app.invalidate_previews()
+            stale_generation = app._preview_generation - 1
+            app._preview_loaded(self.repo, ["stale"], stale_generation)
+            await pilot.pause()
+            self.assertNotIn(self.repo, app._preview_cache)
+            app._preview_loaded(self.repo, ["fresh"], app._preview_generation)
+            await pilot.pause()
+            self.assertEqual(app._preview_cache[self.repo], ["fresh"])
+
 
 class ChoiceTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

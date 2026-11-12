@@ -283,6 +283,45 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
                 primary.return_value = "ansi_blue"
                 self.assertEqual(app.selection_style(), "bold reverse")
 
+    async def test_long_paths_are_truncated_instead_of_wrapped(self):
+        paths = [str(self.root / ("long-name-" * 14 + f"{index}")) for index in range(6)]
+        for path in paths:
+            os.makedirs(path, exist_ok=True)
+        app = self.app(paths_git=paths, paths_all=paths)
+        async with app.run_test(size=(70, 16)) as pilot:
+            await pilot.pause()
+            await pilot.press("down")
+            text = app.row_list.render()
+            lines = str(text).split("\n")
+            # One screen line per row: wrapping would shift every later row and
+            # hide the cursor.
+            self.assertEqual(len([line for line in lines if line]), len(paths))
+            for line in lines:
+                self.assertLessEqual(len(line), 70)
+            self.assertIn("\u2026", lines[1])
+
+    async def test_selection_bar_spans_the_whole_column(self):
+        paths = [str(self.root / ("wide-row-" * 20 + f"{index}")) for index in range(4)]
+        for path in paths:
+            os.makedirs(path, exist_ok=True)
+        app = self.app(paths_git=paths, paths_all=paths)
+        async with app.run_test(size=(70, 16)) as pilot:
+            await pilot.pause()
+            await pilot.press("down")
+            text = app.row_list.render()
+            lines = str(text).split("\n")
+            self.assertEqual(len(lines[0]), 70)
+            self.assertEqual(len(lines[1]), 70)
+            start = len(lines[0]) + 1
+            padded = [
+                span
+                for span in text.spans
+                if span.start <= start
+                and span.end >= start + 70
+                and " on " in str(span.style)
+            ]
+            self.assertTrue(padded, [(s.start, s.end, str(s.style)) for s in text.spans])
+
     async def test_toggle_all(self):
         app = self.app(paths_all=[self.repo, self.other, str(self.root)])
         async with app.run_test() as pilot:

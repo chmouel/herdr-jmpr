@@ -78,6 +78,10 @@ class RowList(Static):
         self.spans: list[list[tuple[int, int]]] = []
         self.selected = 0
         self.selected_row_style = "bold reverse"
+        # One screen line per row: wrapped paths would shift every later row and
+        # push the highlighted line out of the popup.
+        self.styles.text_wrap = "nowrap"
+        self.styles.text_overflow = "ellipsis"
 
     def set_rows(
         self,
@@ -94,8 +98,15 @@ class RowList(Static):
         self.styles.height = max(len(rows), 1)
         self.update(self._build_text())
 
+    def _row_width(self) -> int:
+        for width in (self.size.width, self.container_size.width):
+            if width > 0:
+                return width
+        return 0
+
     def _build_text(self) -> Text:
         text = Text()
+        width = self._row_width()
         for index, row in enumerate(self.rows):
             line = Text()
             selected = index == self.selected
@@ -116,6 +127,10 @@ class RowList(Static):
                 line.append(row.shown[start:end], style="bold underline")
                 position = end
             line.append_text(Text(row.shown[position:]))
+            if width:
+                # Truncate instead of wrapping, and give the cursor row a bar
+                # that spans the whole column rather than just its text.
+                line.truncate(width, overflow="ellipsis", pad=selected)
             if selected:
                 line.stylize(self.selected_row_style)
             text.append_text(line)

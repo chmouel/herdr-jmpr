@@ -318,6 +318,21 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("Invalid names.tsv line 1: bad line", stderr)
 
+    def test_invalid_settings_file_reports_error(self):
+        config = self.root / "config"
+        config.mkdir()
+        (config / "config.toml").write_text('start_mode = "vi"\n')
+        fake = self.fake()
+        code, stderr = self.run_cli(
+            ["--close", str(self.target)],
+            environment={
+                "HERDR_BIN_PATH": str(fake.executable),
+                "HERDR_PLUGIN_CONFIG_DIR": str(config),
+            },
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("start_mode must be one of", stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

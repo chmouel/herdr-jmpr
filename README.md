@@ -38,8 +38,13 @@ Each action opens a popup with the picker (`placement = "popup"`, 80% x 80%).
 
 ## Configuration
 
-Workspace labels default to the directory name. To override them, create
-`names.tsv` in the plugin config directory (`herdr plugin config-dir herdr-zshz`):
+Both files live in the plugin config directory, which
+`herdr plugin config-dir herdr-zshz` prints
+(`~/.config/herdr/plugins/config/herdr-zshz` by default).
+
+### Workspace labels (`names.tsv`)
+
+Labels default to the directory name. To override them, create `names.tsv`:
 
 ```tsv
 # <path><TAB><label>
@@ -52,9 +57,25 @@ Lines that are empty or start with `#` are ignored. Any other line must contain
 exactly one tab separating a non-empty path and a non-empty label; if it does
 not, the plugin prints `Invalid names.tsv line <n>: <line>` and exits 1.
 
+### Settings (`config.toml`)
+
+Optional; without it the built-in defaults apply.
+
+```toml
+# "insert" (default) filters as you type; "normal" starts in the vim keymap,
+# where you navigate with j/k and press i, a or / to start filtering.
+start_mode = "normal"
+```
+
+`start_mode` accepts `insert` or `normal`. Unknown keys and invalid values make
+the plugin print `Invalid <path>: ...` and exit 1 rather than silently ignoring
+the file, so typos surface immediately. `HERDR_PLUGIN_CONFIG_DIR` overrides the
+directory, which is handy for trying a different config without moving files.
+
 ## Picker keys
 
-The picker starts in `INSERT` mode and lists git repository roots; `alt-a`
+The picker starts in `INSERT` mode (or `NORMAL` mode when `start_mode = "normal"`
+is set in `config.toml`) and lists git repository roots; `alt-a`
 (or the `all` action) switches to every zsh-z directory.
 
 Insert mode:
@@ -145,6 +166,7 @@ make link     # herdr plugin link .
 Layout:
 
 - `herdr_zshz/config.py` — `names.tsv` loading and workspace labels
+- `herdr_zshz/settings.py` — `config.toml` loading and defaults
 - `herdr_zshz/frecency.py` — zsh-z data parsing, ranking and bucket ordering
 - `herdr_zshz/query.py` — fzf extended-search matcher and highlight spans
 - `herdr_zshz/state.py` — canonical/legacy state, recovery, atomic writes,

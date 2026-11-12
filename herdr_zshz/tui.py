@@ -231,6 +231,7 @@ class PickerApp(App[Result | None]):
         mapping_reader: Callable[[], dict[str, str]] | None = None,
         strict_mapping_reader: Callable[[], dict[str, str]] | None = None,
         history: list[str] | None = None,
+        start_mode: str = "insert",
     ) -> None:
         super().__init__()
         self.paths = {"git": paths_git, "all": paths_all}
@@ -244,7 +245,7 @@ class PickerApp(App[Result | None]):
         self.mapping_reader = mapping_reader or (lambda: {})
         self.strict_mapping_reader = strict_mapping_reader or self.mapping_reader
         self.history = history
-        self.mode = "insert"
+        self.mode = start_mode if start_mode in ("insert", "normal") else "insert"
         self.query = ""
         self.cursor = 0
         self.yank = ""
@@ -263,7 +264,9 @@ class PickerApp(App[Result | None]):
         yield Static("", id="title")
         yield Static("", id="query", markup=False)
         with Horizontal(id="body"):
-            with VerticalScroll(id="list-scroll"):
+            # Not focusable: otherwise the container eats down/up and scrolls on
+            # its own, which drags the list along with every cursor move.
+            with VerticalScroll(id="list-scroll", can_focus=False):
                 yield RowList(id="list")
             yield Static("", id="preview", markup=False)
         yield Static("", id="status")
@@ -332,10 +335,18 @@ class PickerApp(App[Result | None]):
         return None
 
     def scroll_selection(self) -> None:
+        """Scroll only when the cursor leaves the viewport, like fzf.
+
+        The list stays put while the cursor moves inside it; it scrolls by the
+        minimum needed to keep the cursor visible.
+        """
         container = self.query_one("#list-scroll", VerticalScroll)
         height = max(1, container.size.height)
-        target = max(0, self.index - height // 2)
-        container.scroll_to(y=target, animate=False)
+        top = max(0, int(container.scroll_offset.y))
+        if self.index < top:
+            container.scroll_to(y=self.index, animate=False)
+        elif self.index >= top + height:
+            container.scroll_to(y=self.index - height + 1, animate=False)
 
     def set_index(self, index: int) -> None:
         if not self.filtered:

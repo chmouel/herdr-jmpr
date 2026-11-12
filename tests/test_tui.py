@@ -120,6 +120,27 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.query, "")
             self.assertEqual(len(app.filtered), 2)
 
+    async def test_start_mode_insert_is_the_default(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertEqual(app.mode, "insert")
+
+    async def test_start_mode_normal_from_settings(self):
+        app = self.app(start_mode="normal")
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertEqual(app.mode, "normal")
+            # Typing must navigate, not filter, until an insert key is pressed.
+            await pilot.press("j")
+            self.assertEqual(app.index, 1)
+            self.assertEqual(app.query, "")
+            await pilot.press("i")
+            self.assertEqual(app.mode, "insert")
+            await pilot.press("r", "e", "p")
+            self.assertEqual(app.query, "rep")
+            self.assertEqual([row.path for row in app.filtered], [self.repo])
+
     async def test_enter_returns_selection(self):
         app = self.app()
         async with app.run_test() as pilot:
@@ -182,6 +203,52 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
             await pilot.press("H")
             self.assertEqual(app.index, 7)
             self.assertNotEqual(app.index, 0)
+
+    async def test_cursor_moves_without_scrolling_the_list(self):
+        paths = [str(self.root / f"c{index:03}") for index in range(40)]
+        for path in paths:
+            os.makedirs(path, exist_ok=True)
+        app = self.app(paths_git=paths, paths_all=paths)
+        async with app.run_test(size=(100, 20)) as pilot:
+            await pilot.pause()
+            container = app.query_one("#list-scroll", VerticalScroll)
+            height = container.size.height
+            self.assertGreater(height, 3)
+            # Inside the viewport the list must stay still, and the container
+            # must not scroll on its own as it did when it could take focus.
+            for expected in range(1, height):
+                await pilot.press("down")
+                self.assertEqual(app.index, expected)
+                self.assertEqual(int(container.scroll_offset.y), 0)
+            # Crossing the bottom edge scrolls by exactly one line.
+            await pilot.press("down")
+            self.assertEqual(int(container.scroll_offset.y), 1)
+            for step in range(2, 6):
+                await pilot.press("down")
+                self.assertEqual(int(container.scroll_offset.y), step)
+            # Going back up inside the viewport leaves the offset alone, and only
+            # scrolls again once the cursor passes the top edge.
+            await pilot.press("up")
+            self.assertEqual(int(container.scroll_offset.y), 5)
+            top = int(container.scroll_offset.y)
+            while app.index > top:
+                await pilot.press("up")
+            self.assertEqual(int(container.scroll_offset.y), top)
+            await pilot.press("up")
+            self.assertEqual(int(container.scroll_offset.y), top - 1)
+
+    async def test_arrow_keys_are_not_handled_twice(self):
+        paths = [str(self.root / f"k{index:03}") for index in range(40)]
+        for path in paths:
+            os.makedirs(path, exist_ok=True)
+        app = self.app(paths_git=paths, paths_all=paths)
+        async with app.run_test(size=(100, 20)) as pilot:
+            await pilot.pause()
+            self.assertFalse(app.query_one("#list-scroll", VerticalScroll).can_focus)
+            await pilot.press("down")
+            self.assertEqual(app.index, 1)
+            await pilot.press("ctrl+n")
+            self.assertEqual(app.index, 2)
 
     async def test_toggle_all(self):
         app = self.app(paths_all=[self.repo, self.other, str(self.root)])
@@ -451,7 +518,7 @@ class ExtendedFilterAndModesTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_extended_search_and_smartcase_keep_rank_order(self):
         app = self.app()
-        async with app.run_test() as pilot:
+        async with app.run_test():
             app.insert_text("a | Beta")
             self.assertEqual([row.path for row in app.filtered], [self.alpha, self.beta, self.gamma])
             app.clear_query()

@@ -14,6 +14,7 @@ from pathlib import Path
 from .config import NamesError, load_names, workspace_label
 from .frecency import current_project, open_paths, rank_paths, read_history
 from .herdr import Herdr, HerdrError, layout_ops
+from .settings import Settings, SettingsError, load_settings
 from .state import (
     StateError,
     lock_file,
@@ -300,7 +301,7 @@ def jump(
     return 0
 
 
-def interactive(move_mode: str | None, show_all: bool) -> int:
+def interactive(move_mode: str | None, show_all: bool, settings: Settings) -> int:
     names = load_names()
     herdr = Herdr()
     socket = socket_path(herdr)
@@ -333,6 +334,7 @@ def interactive(move_mode: str | None, show_all: bool) -> int:
         mapping_reader=lambda: read_live_mapping(path, instance),
         strict_mapping_reader=lambda: read_live_mapping_strict(path, instance),
         history=history,
+        start_mode=settings.start_mode,
     )
     result = app.run()
     ignore_hangup()
@@ -410,11 +412,13 @@ def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     try:
         move_mode, show_all, picker, close_path = parse(arguments)
+        # Fail fast on a broken config.toml, whatever the entry point.
+        settings = load_settings()
         if picker:
             return open_picker(move_mode, show_all)
         if close_path is not None:
             return close(close_path, load_names(), Herdr())
-        return interactive(move_mode, show_all)
+        return interactive(move_mode, show_all, settings)
     except Failure as error:
         if str(error) == USAGE:
             try:
@@ -424,6 +428,8 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return fail(str(error))
     except NamesError as error:
+        return fail(str(error))
+    except SettingsError as error:
         return fail(str(error))
     except StateError as error:
         return fail(f"Invalid workspace mapping: {error.path}")

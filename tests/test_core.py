@@ -3,7 +3,6 @@ import json
 import multiprocessing
 import os
 import pty
-import signal
 import subprocess
 import tempfile
 import time
@@ -179,7 +178,7 @@ class LockConcurrencyTest(unittest.TestCase):
             fixture = root / "fixture.json"
             fixture.write_text(json.dumps({"workspaces": []}))
             fake.write_text(
-                "#!/usr/bin/env python3\n"
+                "#!/usr/bin/env python3\n"  # noqa: UP031 - the script itself uses %r formatting
                 "import json, os, sys, time\n"
                 "args = sys.argv[1:]\n"
                 "with open(os.environ['LOG'], 'a') as h: h.write(json.dumps(args)+'\\n')\n"
@@ -209,9 +208,10 @@ class LockConcurrencyTest(unittest.TestCase):
 
             def worker(path: str):
                 from herdr_zshz import cli as _cli
-                from herdr_zshz.state import socket_instance as _instance, state_file as _state_file
-                from herdr_zshz.tui import Result as _Result
                 from herdr_zshz.herdr import Herdr as _Herdr
+                from herdr_zshz.state import socket_instance as _instance
+                from herdr_zshz.state import state_file as _state_file
+                from herdr_zshz.tui import Result as _Result
                 os.environ.update(env)
                 _cli.jump(_Result(kind="jump", path=path), _Herdr(str(fake)), str(socket), _instance(str(socket)), _state_file(str(socket)), {})
 
@@ -247,7 +247,7 @@ class PtyHangupTest(unittest.TestCase):
             log = root / "calls.log"
             count = root / "move.count"
             fake.write_text(
-                "#!/usr/bin/env python3\n"
+                "#!/usr/bin/env python3\n"  # noqa: UP031 - the script itself uses %r formatting
                 "import json, os, signal, sys\n"
                 "args = sys.argv[1:]\n"
                 "with open(os.environ['LOG'], 'a') as h: h.write(json.dumps(args)+'\\n')\n"

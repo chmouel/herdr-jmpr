@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from rich.cells import cell_len
 from textual.app import App
 from textual.containers import VerticalScroll
 
@@ -13,6 +14,7 @@ from herdr_zshz.state import StateError
 from herdr_zshz.tui import (
     MAX_CLOSE_ROUNDS,
     ConfirmCloseModal,
+    HelpModal,
     PickerApp,
     SelectWorkspaceModal,
 )
@@ -972,6 +974,349 @@ class RankingRefreshTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 app.paths["all"], rank_paths(self.history, None, set(), True)
             )
+
+
+class PresentationTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.repo = str(self.root / "repo")
+        self.other = str(self.root / "other")
+        os.makedirs(self.repo)
+        os.makedirs(self.other)
+
+    def app(self, **kwargs):
+        options = {
+            "paths_git": [self.repo, self.other],
+            "paths_all": [self.repo, self.other],
+            "current": self.repo,
+            "opened": {self.other},
+            "names": {},
+            "herdr": FakeHerdr(),
+            "mapping_reader": lambda: {},
+            "src_pane": "A",
+        }
+        options.update(kwargs)
+        return PickerApp(**options)
+
+    @staticmethod
+    def text(app, selector):
+        return str(app.query_one(selector).render())
+
+    async def test_footer_switches_with_mode_and_condenses_when_narrow(self):
+        app = self.app()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            insert = self.text(app, "#status")
+            self.assertIn("all dirs", insert)
+            self.assertIn("Esc normal", insert)
+            self.assertNotIn("^H", insert)
+            self.assertNotIn("ctrl-h", insert)
+            await pilot.press("escape")
+            normal = self.text(app, "#status")
+            self.assertIn("j/k", normal)
+            self.assertIn("q quit", normal)
+            self.assertNotEqual(insert, normal)
+
+        app = self.app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            footer = self.text(app, "#status")
+            self.assertLessEqual(len(footer), app.query_one("#status").content_size.width)
+            self.assertIn("M-p/t", footer)
+            self.assertIn("? help", footer)
+
+    async def test_title_shows_move_badge_and_dataset_hint(self):
+        app = self.app(move_mode="pane")
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            title = self.text(app, "#title")
+            self.assertTrue(title.startswith(" MOVE PANE "), title)
+            self.assertTrue(title.endswith("[git roots]"), title)
+            badge = [
+                span
+                for span in app.query_one("#title").render().spans
+                if getattr(span.style, "reverse", False)
+            ]
+            self.assertTrue(badge, "the move badge must be a reverse-video keycap")
+            await pilot.press("alt+a")
+            self.assertTrue(self.text(app, "#title").endswith("[all dirs]"))
+
+    async def test_prompt_bar_pins_the_match_count_to_the_right_edge(self):
+        app = self.app()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            bar = self.text(app, "#query")
+            self.assertTrue(bar.endswith("2/2"), repr(bar))
+            self.assertEqual(len(bar), app.query_one("#query").content_size.width)
+            app.insert_text("repo")
+            await pilot.pause()
+            bar = self.text(app, "#query")
+            self.assertTrue(bar.endswith("1/2"), repr(bar))
+
+        app = self.app()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.resize_terminal(90, 30)
+            await pilot.pause()
+            bar = self.text(app, "#query")
+            self.assertTrue(bar.endswith("2/2"), repr(bar))
+            self.assertEqual(len(bar), app.query_one("#query").content_size.width)
+
+    async def test_preview_renders_sections_with_a_key_column(self):
+        app = self.app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.preview_lines = [
+                self.repo,
+                "label: repo",
+                "open: w1",
+                "  tabs: t1, t2  agents: copilot",
+                "git: main (dirty) \u21911",
+                "last: feat: add vim normal mode " + "x" * 200,
+            ]
+            app.update_preview()
+            preview = self.text(app, "#preview")
+            for needle in (
+                "WORKSPACE",
+                "label    repo",
+                "open (w1)",
+                "tabs     t1, t2",
+                "agents   copilot",
+                "GIT",
+                "branch   main (dirty) \u21911",
+                "commit   feat: add vim normal mode",
+                "\u2500",
+                "\u2026",
+            ):
+                self.assertIn(needle, preview)
+
+            app.preview_lines = [self.repo, "label: repo"]
+            app.update_preview()
+            preview = self.text(app, "#preview")
+            self.assertIn("WORKSPACE", preview)
+            self.assertIn("loading\u2026", preview)
+            self.assertNotIn("GIT", preview)
+
+    async def test_selected_row_has_no_foreground_but_fills_the_width(self):
+        app = self.app()
+        async with app.run_test(size=(100, 20)) as pilot:
+            await pilot.pause()
+            await pilot.press("down")
+            text = app.row_list._build_text()
+            lines = text.split("\n")
+            start = len(lines[0]) + 1
+            width = len(lines[1])
+            bar = [
+                span
+                for span in text.spans
+                if span.start == start and span.end == start + width and " on " in str(span.style)
+            ]
+            self.assertTrue(bar, [(s.start, s.end, str(s.style)) for s in text.spans])
+            inside = [
+                span
+                for span in text.spans
+                if span.start >= start and span.end <= start + width
+            ]
+            self.assertTrue(inside)
+            for span in inside:
+                style = str(span.style)
+                if " on " in style:
+                    continue
+                for colour in ("yellow", "cyan", "dim", "green", "red", "blue"):
+                    self.assertNotIn(
+                        colour,
+                        style,
+                        f"selected row span carries a foreground: {style}",
+                    )
+
+    async def test_long_query_is_windowed_around_the_cursor(self):
+        app = self.app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app.query = "segment/" * 40
+            app.cursor = len(app.query)
+            app.update_status()
+            bar = self.text(app, "#query")
+            self.assertIn("\u2026", bar)
+            self.assertLessEqual(len(bar), app.query_one("#query").content_size.width)
+            self.assertTrue(bar.rstrip().endswith("2/2"))
+            cursor = [
+                span
+                for span in app.query_one("#query").render().spans
+                if getattr(span.style, "reverse", False)
+            ]
+            self.assertTrue(cursor, "the block cursor must stay visible")
+
+    async def test_right_aligned_fields_follow_growing_and_shrinking_terminal(self):
+        app = self.app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            for width in (120, 80):
+                await pilot.resize_terminal(width, 24)
+                await pilot.pause()
+                for selector in ("#title", "#query"):
+                    widget = app.query_one(selector)
+                    rendered = widget.render()
+                    self.assertEqual(cell_len(rendered.plain), widget.content_size.width)
+                self.assertTrue(self.text(app, "#title").endswith("[git roots]"))
+                self.assertTrue(self.text(app, "#query").endswith("2/2"))
+
+    async def test_bars_track_every_single_column_resize(self):
+        app = self.app()
+        async with app.run_test(size=(120, 24)) as pilot:
+            await pilot.pause()
+            for width in (121, 122, 123, 124, 125, 124, 123, 122):
+                await pilot.resize_terminal(width, 24)
+                await pilot.pause()
+                for selector in ("#title", "#query"):
+                    widget = app.query_one(selector)
+                    rendered = widget.render()
+                    self.assertEqual(
+                        cell_len(rendered.plain),
+                        widget.content_size.width,
+                        f"{selector} at {width} columns",
+                    )
+                # The footer is left-aligned, so it only has to fit.
+                footer = app.query_one("#status")
+                self.assertLessEqual(cell_len(str(footer.render())), footer.content_size.width)
+                self.assertTrue(self.text(app, "#title").endswith("[git roots]"))
+                self.assertTrue(self.text(app, "#query").endswith("2/2"))
+
+    async def test_layout_rules_live_in_default_css(self):
+        # The required nowrap/ellipsis and band colours must be stylesheet
+        # rules, not inline per-widget assignments.
+        css = PickerApp.DEFAULT_CSS
+        self.assertIn("text-wrap: nowrap", css)
+        self.assertIn("text-overflow: ellipsis", css)
+        self.assertIn("#preview", css)
+        self.assertIn("width: 38%", css)
+
+        app = self.app()
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            rows = app.query_one("#list")
+            self.assertEqual(rows.styles.text_wrap, "nowrap")
+            self.assertEqual(rows.styles.text_overflow, "ellipsis")
+            self.assertEqual(app.query_one("#preview").styles.width.value, 38.0)
+
+    async def test_wide_query_and_error_fit_the_prompt_bar_in_cells(self):
+        app = self.app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            query = "\u754c" * 100
+            prefix_width = len(" INSERT git\u276f ")
+            for cursor in (0, 50, len(query)):
+                app.query = query
+                app.cursor = cursor
+                app.update_status()
+                await pilot.pause()
+                widget = app.query_one("#query")
+                rendered = widget.render()
+                bar = rendered.plain
+                self.assertLessEqual(cell_len(bar), widget.content_size.width)
+                self.assertNotIn("\n", bar)
+                expected = query[cursor] if cursor < len(query) else " "
+                cursor_spans = [
+                    span
+                    for span in rendered.spans
+                    if getattr(span.style, "reverse", False)
+                    and span.start >= prefix_width
+                ]
+                self.assertEqual(len(cursor_spans), 1, bar)
+                span = cursor_spans[0]
+                self.assertEqual(bar[span.start], expected)
+                self.assertLess(span.start, widget.content_size.width)
+            app.error = "E" * 100
+            app.update_status()
+            await pilot.pause()
+            widget = app.query_one("#query")
+            bar = widget.render().plain
+            self.assertEqual(cell_len(bar), widget.content_size.width)
+            self.assertNotIn("\n", bar)
+
+    async def test_preview_keeps_every_workspace_detail(self):
+        app = self.app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.preview_lines = [
+                self.repo,
+                "label: repo",
+                "open: w1, w2",
+                "  tabs: t1  agents: copilot",
+                "  tabs: t2  agents: codex",
+            ]
+            app.update_preview()
+            preview = self.text(app, "#preview")
+            for needle in (
+                "tabs     t1",
+                "agents   copilot",
+                "tabs     t2",
+                "agents   codex",
+            ):
+                self.assertIn(needle, preview)
+
+    async def test_help_fits_a_small_terminal(self):
+        app = self.app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app.show_help()
+            for _ in range(100):
+                if isinstance(app.screen, HelpModal):
+                    break
+                await pilot.pause(0.01)
+            self.assertIsInstance(app.screen, HelpModal)
+            panel = app.screen.query_one("#help")
+            region = panel.region
+            self.assertGreaterEqual(region.x, 0)
+            self.assertGreaterEqual(region.y, 0)
+            self.assertLessEqual(region.x + region.width, 80)
+            self.assertLessEqual(region.y + region.height, 24)
+            rendered = str(panel.render())
+            self.assertIn("quit", rendered)
+            line = rendered[: rendered.index("quit")].count("\n")
+            self.assertLess(line, region.height)
+
+    async def test_design_details_use_themed_pill_and_keycaps(self):
+        app = self.app(names={self.other: "project-y"}, opened=set())
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            text = app.row_list._build_text()
+            suffix = [
+                span
+                for span in text.spans
+                if "italic" in str(span.style) and "cyan" in str(span.style)
+            ]
+            self.assertTrue(suffix, [str(span.style) for span in text.spans])
+            await pilot.press("escape")
+            footer = self.text(app, "#status")
+            self.assertIn("i/a/\u2571 filter", footer)
+            pill = [
+                span
+                for span in app.query_one("#query").render().spans
+                if span.start == 0
+            ]
+            self.assertTrue(pill)
+            self.assertNotIn("yellow", str(pill[0].style))
+
+    async def test_confirm_and_select_modals_keep_the_approved_labels(self):
+        app = self.app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app.push_screen(ConfirmCloseModal("repo", []))
+            await pilot.pause()
+            confirm = self.text(app.screen, "#confirm")
+            self.assertIn("[y/N]", confirm)
+            await pilot.press("n")
+            await pilot.pause()
+            app.push_screen(SelectWorkspaceModal("repo", ["w-old"]))
+            await pilot.pause()
+            select = self.text(app.screen, "#select")
+            self.assertTrue(select.startswith("Select workspace for repo"), select)
+            panel = app.screen.query_one("#select")
+            self.assertEqual(panel.border_title, " Workspace Conflict ")
+
 
 
 if __name__ == "__main__":

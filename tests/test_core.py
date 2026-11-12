@@ -292,7 +292,26 @@ class PtyHangupTest(unittest.TestCase):
                 )
                 time.sleep(0.8)
                 os.write(master, b"\r")
-                code = proc.wait(timeout=20)
+                # The picker writes a full screen per refresh; with no reader
+                # the pty buffer fills and the child blocks before it can
+                # consume the Enter above. Drain it while waiting.
+                os.set_blocking(master, False)
+                deadline = time.time() + 20
+                code = None
+                while time.time() < deadline:
+                    try:
+                        while os.read(master, 65536):
+                            pass
+                    except (BlockingIOError, OSError):
+                        pass
+                    code = proc.poll()
+                    if code is not None:
+                        break
+                    time.sleep(0.02)
+                if code is None:
+                    proc.kill()
+                    proc.wait()
+                    self.fail("herdr-zshz did not exit after accepting the move")
             finally:
                 os.close(slave)
                 os.close(master)

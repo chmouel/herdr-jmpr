@@ -3,6 +3,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from textual.app import App
 from textual.containers import VerticalScroll
@@ -249,6 +250,38 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.index, 1)
             await pilot.press("ctrl+n")
             self.assertEqual(app.index, 2)
+
+    async def test_selected_row_is_visibly_highlighted(self):
+        app = self.app()
+        async with app.run_test(size=(100, 20)) as pilot:
+            await pilot.pause()
+            await pilot.press("down")
+            text = app.row_list._build_text()
+            lines = text.split("\n")
+            self.assertTrue(str(lines[1]).startswith("\u258c"))
+            self.assertFalse(str(lines[0]).startswith("\u258c"))
+            # Reverse video alone can be invisible, so the row carries an
+            # explicit background taken from the theme's primary colour.
+            style = app.row_list.selected_row_style
+            self.assertNotEqual(style, "bold reverse")
+            self.assertIn(" on ", style)
+            highlighted = [
+                span
+                for span in text.spans
+                if span.start == len(lines[0]) + 1 and " on " in str(span.style)
+            ]
+            self.assertTrue(highlighted, [str(span.style) for span in text.spans])
+
+    async def test_selection_style_falls_back_when_the_theme_has_no_colour(self):
+        app = self.app()
+        async with app.run_test(size=(100, 20)) as pilot:
+            await pilot.pause()
+            theme = app.current_theme
+            with mock.patch.object(
+                type(theme), "primary", new_callable=mock.PropertyMock, create=True
+            ) as primary:
+                primary.return_value = "ansi_blue"
+                self.assertEqual(app.selection_style(), "bold reverse")
 
     async def test_toggle_all(self):
         app = self.app(paths_all=[self.repo, self.other, str(self.root)])

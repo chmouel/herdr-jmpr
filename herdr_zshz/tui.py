@@ -70,18 +70,27 @@ def _git(path: str, *args: str) -> str:
 class RowList(Static):
     """The rendered picker rows; selection is drawn into the text."""
 
+    POINTER = "\u258c"
+
     def __init__(self, **kwargs) -> None:
         super().__init__("", markup=False, **kwargs)
         self.rows: list[Row] = []
         self.spans: list[list[tuple[int, int]]] = []
         self.selected = 0
+        self.selected_row_style = "bold reverse"
 
     def set_rows(
-        self, rows: list[Row], spans: list[list[tuple[int, int]]], selected: int
+        self,
+        rows: list[Row],
+        spans: list[list[tuple[int, int]]],
+        selected: int,
+        selected_row_style: str | None = None,
     ) -> None:
         self.rows = rows
         self.spans = spans
         self.selected = selected
+        if selected_row_style:
+            self.selected_row_style = selected_row_style
         self.styles.height = max(len(rows), 1)
         self.update(self._build_text())
 
@@ -89,6 +98,10 @@ class RowList(Static):
         text = Text()
         for index, row in enumerate(self.rows):
             line = Text()
+            selected = index == self.selected
+            # fzf's pointer bar: a colour-independent cue that survives
+            # terminals where reverse video is indistinguishable.
+            line.append(self.POINTER if selected else " ", style="bold")
             marker_style = (
                 "bold yellow" if row.marker == CURRENT_MARK else "bold blue"
             )
@@ -103,8 +116,8 @@ class RowList(Static):
                 line.append(row.shown[start:end], style="bold underline")
                 position = end
             line.append_text(Text(row.shown[position:]))
-            if index == self.selected:
-                line.stylize("reverse")
+            if selected:
+                line.stylize(self.selected_row_style)
             text.append_text(line)
             text.append("\n")
         return text
@@ -320,7 +333,9 @@ class PickerApp(App[Result | None]):
             else:
                 self.index = 0
         self.index = max(0, min(self.index, len(self.filtered) - 1))
-        self.row_list.set_rows(self.filtered, self.spans, self.index)
+        self.row_list.set_rows(
+            self.filtered, self.spans, self.index, self.selection_style()
+        )
         self.scroll_selection()
         self.update_status()
         self.show_preview()
@@ -348,11 +363,35 @@ class PickerApp(App[Result | None]):
         elif self.index >= top + height:
             container.scroll_to(y=self.index - height + 1, animate=False)
 
+    def selection_style(self) -> str:
+        """A selection bar that contrasts whatever theme the popup runs with.
+
+        Reverse video alone can be invisible on some profiles, so paint the row
+        with the theme's primary colour and the readable one of black/white.
+        """
+        theme = getattr(self.app, "current_theme", None)
+        primary = getattr(theme, "primary", "") or ""
+        if not primary.startswith("#") or len(primary) not in (4, 7):
+            return "bold reverse"
+        digits = primary[1:]
+        if len(digits) == 3:
+            digits = "".join(character * 2 for character in digits)
+        try:
+            red, green, blue = (int(digits[index : index + 2], 16) for index in (0, 2, 4))
+        except ValueError:
+            return "bold reverse"
+        # Rec. 601 luma, good enough to pick a legible foreground.
+        luma = 0.299 * red + 0.587 * green + 0.114 * blue
+        foreground = "#000000" if luma > 140 else "#ffffff"
+        return f"bold {foreground} on {primary}"
+
     def set_index(self, index: int) -> None:
         if not self.filtered:
             return
         self.index = max(0, min(index, len(self.filtered) - 1))
-        self.row_list.set_rows(self.filtered, self.spans, self.index)
+        self.row_list.set_rows(
+            self.filtered, self.spans, self.index, self.selection_style()
+        )
         self.scroll_selection()
         self.show_preview()
 

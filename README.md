@@ -123,6 +123,11 @@ be negated (`!term`, `!^prefix`, `!suffix$`), anchored (`^prefix`, `suffix$`)
 or forced to a plain substring (`'exact`). Rows keep their frecency order and
 matched substrings are highlighted.
 
+The cursor row is drawn with a `▌` pointer and painted in the theme's primary
+colour with a contrasting foreground, so it stays visible even on terminals
+where reverse video is indistinguishable. Rows also carry `◆` for the current
+project and `●` for projects whose workspace is already open.
+
 ## How it decides where to go
 
 1. A live workspace with the target label already mapped to the target path is

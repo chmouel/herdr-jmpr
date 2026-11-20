@@ -195,6 +195,7 @@ def format_ansi_rows(
     tab_map = tabs or {}
     lines: list[str] = []
     for path in paths:
+        tab_entries = tab_map.get(path) or ()
         lines.append(
             format_ansi_row(
                 path,
@@ -202,10 +203,9 @@ def format_ansi_rows(
                 opened,
                 names,
                 include_target=include_target,
-                agents=agent_map.get(path, ()),
+                agents=() if tab_entries else agent_map.get(path, ()),
             )
         )
-        tab_entries = tab_map.get(path) or ()
         for index, tab in enumerate(tab_entries):
             lines.append(
                 format_ansi_tab_row(
@@ -778,18 +778,18 @@ def run_gum(
     by_plain: dict[str, tuple[str, str, str]] = {}
     lines: list[str] = []
     for path in paths:
+        tab_entries = tab_map.get(path) or ()
         line = format_ansi_row(
             path,
             current,
             opened,
             names,
             include_target=False,
-            agents=agent_map.get(path, ()),
+            agents=() if tab_entries else agent_map.get(path, ()),
         )
         lines.append(line)
         by_raw[line] = (path, "", "")
         by_plain[ANSI_RE.sub("", line)] = (path, "", "")
-        tab_entries = tab_map.get(path) or ()
         for index, tab in enumerate(tab_entries):
             tab_line = format_ansi_tab_row(
                 path,

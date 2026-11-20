@@ -367,10 +367,12 @@ class CliBackendsExecutionTest(unittest.TestCase):
             current=None,
             opened={str(self.alpha)},
             names={},
+            agents={str(self.alpha): ("pi",)},
             tabs=tabs,
         )
         lines = rendered.splitlines()
         self.assertEqual(len(lines), 3)
+        self.assertNotIn("\u03c0", picker.ANSI_RE.sub("", lines[0]))
         self.assertIn("├─ ", picker.ANSI_RE.sub("", lines[1]))
         self.assertIn("Review PR", picker.ANSI_RE.sub("", lines[1]))
         self.assertIn("\u03c0 pi \u00b7 working", picker.ANSI_RE.sub("", lines[1]))

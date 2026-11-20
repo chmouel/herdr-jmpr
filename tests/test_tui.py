@@ -1564,6 +1564,7 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
             herdr=FakeHerdr(),
             mapping_reader=lambda: {"w1": str(self.open_ws)},
             src_pane="w1:p1",
+            agents={str(self.open_ws): ("pi",)},
             tabs=self.tabs,
         )
         params.update(overrides)
@@ -1578,6 +1579,10 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(app.filtered[1].is_tab)
             self.assertEqual(app.filtered[1].tree_prefix, "├─ ")
             self.assertEqual(app.filtered[2].tree_prefix, "└─ ")
+
+            ws_line = app.row_list._row_text(0, 90).plain
+            self.assertNotIn("\u03c0", ws_line)
+            self.assertEqual(app.filtered[0].agents, ())
 
             tab_line = app.row_list._row_text(1, 90).plain
             self.assertIn("├─ ", tab_line)
@@ -1619,6 +1624,34 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(app.filtered[1].is_tab)
             self.assertEqual(app.filtered[1].tab_id, "w1:t1")
             self.assertEqual(app.filtered[1].tree_prefix, "└─ ")
+
+    async def test_collapse_and_expand_with_left_right_toggles_workspace_agents(self):
+        app = self.make_app()
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            # Expanded by default: no agent badge on workspace row, tabs visible.
+            self.assertEqual(len(app.filtered), 5)
+            self.assertEqual(app.filtered[0].agents, ())
+            self.assertNotIn("\u03c0", app.row_list._row_text(0, 90).plain)
+
+            # Move onto a child tab and press left -> collapses parent, selects parent, shows agent badge.
+            await pilot.press("down")
+            self.assertTrue(app.filtered[app.index].is_tab)
+            await pilot.press("left")
+            await pilot.pause()
+            self.assertEqual(len(app.filtered), 3)
+            self.assertEqual(app.index, 0)
+            self.assertFalse(app.filtered[0].is_tab)
+            self.assertEqual(app.filtered[0].agents, ("pi",))
+            self.assertIn("\u03c0", app.row_list._row_text(0, 90).plain)
+
+            # Press right on collapsed workspace -> expands tabs and hides workspace agent badge.
+            await pilot.press("right")
+            await pilot.pause()
+            self.assertEqual(len(app.filtered), 5)
+            self.assertEqual(app.filtered[0].agents, ())
+            self.assertNotIn("\u03c0", app.row_list._row_text(0, 90).plain)
+            self.assertTrue(app.filtered[1].is_tab)
 
     async def test_open_rated_higher_most_of_the_time_on_filter(self):
         # Closed exact basename 'api' beats weak open path match '~/.../api/frontend',

@@ -1089,6 +1089,7 @@ class PickerApp(App[Result | None]):
             )
         self.tabs: dict[str, tuple[TabEntry, ...]] = dict(tabs) if tabs else {}
         self.show_tabs = show_tabs
+        self.collapsed_paths: set[str] = set()
         self.mode = start_mode if start_mode in ("insert", "normal") else "insert"
         self.query = ""
         self.cursor = 0
@@ -1258,17 +1259,18 @@ class PickerApp(App[Result | None]):
                 if path in self.opened
                 else " "
             )
+            tab_entries = (self.tabs.get(path) or ()) if include_tabs else ()
+            expanded = bool(tab_entries) and path not in self.collapsed_paths
             rows.append(
                 Row(
                     path=path,
                     shown=shown,
                     marker=marker,
                     label=label,
-                    agents=self.agents.get(path, ()),
+                    agents=() if expanded else self.agents.get(path, ()),
                 )
             )
-            if include_tabs:
-                tab_entries = self.tabs.get(path) or ()
+            if expanded:
                 for index, tab in enumerate(tab_entries):
                     rows.append(
                         Row(
@@ -2301,6 +2303,26 @@ class PickerApp(App[Result | None]):
         self.show_tabs = not self.show_tabs
         self.set_rows()
 
+    def collapse_selected(self) -> None:
+        if not self.show_tabs or self.move_mode is not None:
+            return
+        row = self.selected_row()
+        if row is None or not self.tabs.get(row.path):
+            return
+        if row.path not in self.collapsed_paths:
+            self.collapsed_paths.add(row.path)
+            self.set_rows()
+
+    def expand_selected(self) -> None:
+        if not self.show_tabs or self.move_mode is not None:
+            return
+        row = self.selected_row()
+        if row is None or not self.tabs.get(row.path):
+            return
+        if row.path in self.collapsed_paths:
+            self.collapsed_paths.remove(row.path)
+            self.set_rows()
+
     # -- editing ----------------------------------------------------------
 
     def insert_text(self, text: str) -> None:
@@ -2391,6 +2413,8 @@ class PickerApp(App[Result | None]):
     KEY_INSERT = {
         "down": lambda self: self.set_index(self.index + 1),
         "up": lambda self: self.set_index(self.index - 1),
+        "left": lambda self: self.collapse_selected(),
+        "right": lambda self: self.expand_selected(),
         "ctrl+n": lambda self: self.set_index(self.index + 1),
         "ctrl+p": lambda self: self.set_index(self.index - 1),
         "ctrl+j": lambda self: self.set_index(self.index + 1),
@@ -2425,6 +2449,9 @@ class PickerApp(App[Result | None]):
         "k": lambda self: self.set_index(self.index - 1),
         "down": lambda self: self.set_index(self.index + 1),
         "up": lambda self: self.set_index(self.index - 1),
+        "left": lambda self: self.collapse_selected(),
+        "right": lambda self: self.expand_selected(),
+        "h": lambda self: self.collapse_selected(),
         "g": lambda self: self._start_pending("g"),
         "G": lambda self: self.set_index(len(self.filtered) - 1),
         "ctrl+d": lambda self: self.set_index(self.index + max(1, self._half_page())),

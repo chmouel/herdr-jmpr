@@ -1643,7 +1643,9 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.index, 0)
             self.assertFalse(app.filtered[0].is_tab)
             self.assertEqual(app.filtered[0].agents, ("pi",))
-            self.assertIn("\u03c0", app.row_list._row_text(0, 90).plain)
+            collapsed_line = app.row_list._row_text(0, 90).plain
+            self.assertIn("\u25b8 2", collapsed_line)
+            self.assertIn("\u03c0", collapsed_line)
 
             # Press right on collapsed workspace -> expands tabs and hides workspace agent badge.
             await pilot.press("right")
@@ -1652,6 +1654,46 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.filtered[0].agents, ())
             self.assertNotIn("\u03c0", app.row_list._row_text(0, 90).plain)
             self.assertTrue(app.filtered[1].is_tab)
+
+    async def test_query_working_pill_tab_preview_and_workspace_jump(self):
+        app = self.make_app()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            query_text = app._query_text(100).plain
+            self.assertIn("\u25cf 1 working", query_text)
+
+            # Hovering a tab row highlights it in the preview pane.
+            await pilot.press("down")
+            await pilot.pause()
+            app.preview_data = PreviewData(
+                path=str(self.open_ws),
+                label="frontend",
+                workspaces=(WorkspaceInfo(workspace_id="w1", tabs=("w1:t1", "w1:t2")),),
+            )
+            app.update_preview()
+            preview_text = app._preview_text().plain
+            self.assertIn("\u25b8 Analyze Local Changes", preview_text)
+            self.assertIn("Jump directly to this tab", preview_text)
+            self.assertIn("zsh", preview_text)
+
+            # ] / [ in normal mode skips over tab rows directly to next/prev workspace.
+            await pilot.press("escape")
+            await pilot.press("]")
+            await pilot.pause()
+            self.assertFalse(app.filtered[app.index].is_tab)
+            self.assertEqual(app.filtered[app.index].path, str(self.closed_sub))
+            await pilot.press("[")
+            await pilot.pause()
+            self.assertEqual(app.index, 0)
+            self.assertEqual(app.filtered[app.index].path, str(self.open_ws))
+
+            # Space toggles fold in normal mode.
+            await pilot.press("space")
+            await pilot.pause()
+            self.assertEqual(len(app.filtered), 3)
+            await pilot.press("space")
+            await pilot.pause()
+            self.assertEqual(len(app.filtered), 5)
 
     async def test_open_rated_higher_most_of_the_time_on_filter(self):
         # Closed exact basename 'api' beats weak open path match '~/.../api/frontend',

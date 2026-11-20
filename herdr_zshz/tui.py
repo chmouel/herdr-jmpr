@@ -169,6 +169,8 @@ class Row:
     agent_status: str = ""
     tab_active: bool = False
     tab_focused: bool = False
+    tab_count: int = 0
+    collapsed: bool = False
 
 
 @dataclass(frozen=True)
@@ -537,19 +539,20 @@ class RowList(ScrollView, can_focus=False):
                 mark = OPEN_MARK
                 mark_style = f"bold {palette.success}" if keep_tokens else "bold"
             else:
-                mark = " "
-                mark_style = ""
+                mark = "\u00b7"
+                mark_style = palette.muted if keep_tokens else ""
             line.append(mark, style=mark_style)
             line.append(" ")
 
             shown = row.shown
             shown_text = Text(shown)
             if keep_tokens:
-                base_style = (
-                    f"bold {palette.foreground}".strip()
-                    if (selected or row.tab_focused or row.tab_active)
-                    else palette.foreground
-                )
+                if selected or row.tab_focused or row.tab_active:
+                    base_style = f"bold {palette.foreground}".strip()
+                elif row.agents:
+                    base_style = palette.foreground
+                else:
+                    base_style = palette.muted
                 if base_style:
                     shown_text.stylize(base_style, 0, len(shown))
             elif selected:
@@ -567,16 +570,31 @@ class RowList(ScrollView, can_focus=False):
                     shown_text.stylize(match_style, start, end)
 
             prefix_width = line.cell_len
-            badge = (
-                format_tab_agent_badge(row.agents, row.agent_status)
-                if row.agents
-                else ""
-            )
-            badge_width = cell_len(badge) if badge else 0
-            if badge and width and (width - prefix_width - badge_width - 2 <= 6):
-                badge = format_agent_badges(row.agents)
-                badge_width = cell_len(badge)
-            show_badge = bool(badge) and (
+            badge_text = Text()
+            if row.agents:
+                full_badge = format_tab_agent_badge(row.agents, row.agent_status)
+                status = row.agent_status
+                if status == "working":
+                    dot, dot_style = "\u25cf ", f"bold {palette.success}" if keep_tokens else "bold"
+                    body_style = f"bold {palette.warning}" if keep_tokens else "bold"
+                elif status in ("waiting", "attention"):
+                    dot, dot_style = "\u25c9 ", f"bold {palette.warning}" if keep_tokens else "bold"
+                    body_style = f"bold {palette.warning}" if keep_tokens else "bold"
+                else:
+                    dot, dot_style = "", ""
+                    body_style = f"bold {palette.secondary}" if keep_tokens else "bold"
+                if width and (width - prefix_width - cell_len(dot + full_badge) - 2 <= 6):
+                    compact = format_agent_badges(row.agents)
+                    if dot:
+                        badge_text.append(dot, style=dot_style)
+                    badge_text.append(compact, style=body_style)
+                else:
+                    if dot:
+                        badge_text.append(dot, style=dot_style)
+                    badge_text.append(full_badge, style=body_style)
+
+            badge_width = badge_text.cell_len
+            show_badge = bool(badge_width) and (
                 not width or (width - prefix_width - badge_width - 2 > 4)
             )
             if width:
@@ -589,13 +607,7 @@ class RowList(ScrollView, can_focus=False):
             if show_badge:
                 gap = max(2, width - line.cell_len - badge_width) if width else 2
                 line.append(" " * gap)
-                if not keep_tokens:
-                    badge_style = "bold"
-                elif row.agent_status in ("working", "waiting", "attention"):
-                    badge_style = f"bold {palette.warning}"
-                else:
-                    badge_style = f"bold {palette.secondary}"
-                line.append(badge, style=badge_style)
+                line.append_text(badge_text)
             if width:
                 line.truncate(width, overflow="ellipsis", pad=selected)
             if selected:
@@ -656,9 +668,22 @@ class RowList(ScrollView, can_focus=False):
             if end > start:
                 shown_text.stylize(match_style, start, end)
 
+        right_meta = Text()
+        if row.collapsed and row.tab_count:
+            right_meta.append(
+                f"\u25b8 {row.tab_count}",
+                style=palette.secondary if keep_tokens else "",
+            )
         badge = format_agent_badges(row.agents) if row.agents else ""
-        badge_width = cell_len(badge) if badge else 0
-        show_badge = bool(badge) and (
+        if badge:
+            if right_meta.cell_len:
+                right_meta.append("  ")
+            right_meta.append(
+                badge,
+                style=f"bold {palette.warning}" if keep_tokens else "bold",
+            )
+        badge_width = right_meta.cell_len
+        show_badge = bool(badge_width) and (
             not width or (width - 4 - badge_width - 2 > 6)
         )
         if width:
@@ -671,10 +696,7 @@ class RowList(ScrollView, can_focus=False):
         if show_badge:
             gap = max(2, width - line.cell_len - badge_width) if width else 2
             line.append(" " * gap)
-            line.append(
-                badge,
-                style=f"bold {palette.warning}" if keep_tokens else "bold",
-            )
+            line.append_text(right_meta)
         if width:
             line.truncate(width, overflow="ellipsis", pad=selected)
         if selected:
@@ -1010,6 +1032,9 @@ class PickerApp(App[Result | None]):
         padding: 0 1;
         overflow-x: hidden;
         scrollbar-size-vertical: 1;
+        scrollbar-color: $panel;
+        scrollbar-color-hover: $primary;
+        scrollbar-color-active: $primary;
         background: $background;
     }
     #preview {
@@ -1017,7 +1042,7 @@ class PickerApp(App[Result | None]):
         height: 1fr;
         padding: 1 2;
         background: $surface;
-        border-left: solid $panel;
+        border-left: tall $panel;
     }
     #status {
         height: 2;
@@ -1260,7 +1285,8 @@ class PickerApp(App[Result | None]):
                 else " "
             )
             tab_entries = (self.tabs.get(path) or ()) if include_tabs else ()
-            expanded = bool(tab_entries) and path not in self.collapsed_paths
+            collapsed = bool(tab_entries) and path in self.collapsed_paths
+            expanded = bool(tab_entries) and not collapsed
             rows.append(
                 Row(
                     path=path,
@@ -1268,6 +1294,8 @@ class PickerApp(App[Result | None]):
                     marker=marker,
                     label=label,
                     agents=() if expanded else self.agents.get(path, ()),
+                    tab_count=len(tab_entries),
+                    collapsed=collapsed,
                 )
             )
             if expanded:
@@ -1542,6 +1570,14 @@ class PickerApp(App[Result | None]):
     def update_query_bar(self) -> None:
         self.query_one("#query", Static).refresh()
 
+    def _working_agent_count(self) -> int:
+        return sum(
+            1
+            for tab_list in self.tabs.values()
+            for tab in tab_list
+            if tab.agents and tab.agent_status == "working"
+        )
+
     def _query_text(self, width: int) -> Text:
         palette = self.palette()
         line = Text()
@@ -1563,6 +1599,10 @@ class PickerApp(App[Result | None]):
         count_text = f"{len(self.filtered)}/{len(self.rows)}"
         scope_text = f"[{self.scope}]"
         right = Text()
+        working = self._working_agent_count()
+        if working and width >= 68:
+            right.append(f"\u25cf {working} working", style=f"bold {palette.success}")
+            right.append("  ")
         right.append(count_text, style=palette.muted)
         right.append("  ")
         right.append(scope_text, style=f"bold {palette.secondary}")
@@ -1611,6 +1651,9 @@ class PickerApp(App[Result | None]):
             else:
                 parts = [
                     ("\u23ce", "jump"),
+                    ("\u2190/\u2192", "fold")
+                    if (self.show_tabs and self.move_mode is None)
+                    else ("M-e", "tabs"),
                     ("M-p", "pane"),
                     ("M-t", "tab"),
                     ("M-a", scope_action),
@@ -1775,6 +1818,47 @@ class PickerApp(App[Result | None]):
         text.append(self._ellipsise(display_path(path), width), style=palette.muted)
         text.append("\n\n")
 
+        selected_row = self.selected_row()
+        selected_tab = (
+            selected_row
+            if (selected_row is not None and selected_row.is_tab and selected_row.path == path)
+            else None
+        )
+        if selected_tab is not None:
+            tab_head = Text()
+            tab_head.append("\u25b8 ", style=f"bold {palette.primary}")
+            tab_head.append(
+                selected_tab.shown, style=f"bold {palette.foreground}".strip() or "bold"
+            )
+            tab_head.truncate(width, overflow="ellipsis")
+            text.append_text(tab_head)
+            text.append("\n")
+            if selected_tab.agents:
+                tab_meta = Text()
+                tab_meta.append("  ")
+                if selected_tab.agent_status == "working":
+                    tab_meta.append("\u25cf ", style=f"bold {palette.success}")
+                    tab_meta.append(
+                        format_tab_agent_badge(
+                            selected_tab.agents, selected_tab.agent_status
+                        ),
+                        style=f"bold {palette.warning}",
+                    )
+                else:
+                    tab_meta.append(
+                        format_tab_agent_badge(
+                            selected_tab.agents, selected_tab.agent_status
+                        ),
+                        style=f"bold {palette.secondary}",
+                    )
+                tab_meta.truncate(width, overflow="ellipsis")
+                text.append_text(tab_meta)
+                text.append("\n")
+            text.append(
+                "  \u23ce Jump directly to this tab\n\n",
+                style=palette.success,
+            )
+
         if data.loading:
             text.append("\u25cc  Checking workspace\u2026\n", style=palette.muted)
         elif not data.workspaces:
@@ -1797,22 +1881,66 @@ class PickerApp(App[Result | None]):
                     f"\u25cf  Open ({open_ids})\n",
                     style=f"bold {palette.success}",
                 )
+            rich_tabs = self.tabs.get(path) or ()
             for ws in data.workspaces:
-                short_tabs = [
-                    t[len(ws.workspace_id) + 1 :]
-                    if t.startswith(f"{ws.workspace_id}:")
-                    else t
-                    for t in ws.tabs
-                ]
-                tabs = ", ".join(short_tabs) if short_tabs else "-"
-                tabs_line = Text()
-                tabs_line.append("tabs  ", style=palette.muted)
-                tabs_line.append(
-                    self._ellipsise(tabs, max(4, width - 6)),
-                    style=palette.foreground,
-                )
-                text.append_text(tabs_line)
-                text.append("\n")
+                ws_rich_tabs = [t for t in rich_tabs if t.workspace_id == ws.workspace_id]
+                if ws_rich_tabs:
+                    for tab in ws_rich_tabs:
+                        is_hovered = (
+                            selected_tab is not None and selected_tab.tab_id == tab.tab_id
+                        )
+                        tline = Text()
+                        if is_hovered:
+                            tline.append("\u258c ", style=f"bold {palette.primary}")
+                        else:
+                            tline.append("  ")
+                        if tab.focused:
+                            tline.append(f"{CURRENT_MARK} ", style=f"bold {palette.warning}")
+                        elif tab.active:
+                            tline.append(f"{OPEN_MARK} ", style=f"bold {palette.success}")
+                        else:
+                            tline.append("\u00b7 ", style=palette.muted)
+                        tbadge = format_agent_badges(tab.agents) if tab.agents else ""
+                        label_budget = max(
+                            6, width - 4 - (cell_len(tbadge) + 2 if tbadge else 0)
+                        )
+                        tline.append(
+                            self._ellipsise(tab.label, label_budget),
+                            style=(
+                                f"bold {palette.foreground}".strip()
+                                if (is_hovered or tab.active or tab.focused)
+                                else palette.muted
+                            ),
+                        )
+                        if tbadge:
+                            tline.append("  ")
+                            tline.append(
+                                tbadge,
+                                style=(
+                                    f"bold {palette.warning}"
+                                    if tab.agent_status == "working"
+                                    else f"bold {palette.secondary}"
+                                ),
+                            )
+                        tline.truncate(width, overflow="ellipsis")
+                        text.append_text(tline)
+                        text.append("\n")
+                else:
+                    short_tabs = [
+                        t[len(ws.workspace_id) + 1 :]
+                        if t.startswith(f"{ws.workspace_id}:")
+                        else t
+                        for t in ws.tabs
+                    ]
+                    tabs = ", ".join(short_tabs) if short_tabs else "-"
+                    tabs_line = Text()
+                    tabs_line.append("tabs  ", style=palette.muted)
+                    tabs_line.append(
+                        self._ellipsise(tabs, max(4, width - 6)),
+                        style=palette.foreground,
+                    )
+                    text.append_text(tabs_line)
+                    text.append("\n")
                 if ws.sessions:
                     text.append("\n")
                     for session in ws.sessions:
@@ -1857,6 +1985,8 @@ class PickerApp(App[Result | None]):
         git_info = data.git
         if git_info is not None:
             text.append("\n")
+            rule_len = max(4, min(width, 24))
+            text.append("\u2500" * rule_len + "\n", style=palette.muted)
             git_header = Text()
             git_header.append(f"\u2387 {git_info.branch}", style=f"bold {palette.primary}")
             if git_info.is_worktree:
@@ -2323,6 +2453,29 @@ class PickerApp(App[Result | None]):
             self.collapsed_paths.remove(row.path)
             self.set_rows()
 
+    def toggle_fold_selected(self) -> None:
+        if not self.show_tabs or self.move_mode is not None:
+            return
+        row = self.selected_row()
+        if row is None or not self.tabs.get(row.path):
+            return
+        if row.path in self.collapsed_paths:
+            self.collapsed_paths.remove(row.path)
+        else:
+            self.collapsed_paths.add(row.path)
+        self.set_rows()
+
+    def jump_workspace(self, delta: int) -> None:
+        if not self.filtered:
+            return
+        step = 1 if delta > 0 else -1
+        idx = self.index + step
+        while 0 <= idx < len(self.filtered):
+            if not self.filtered[idx].is_tab:
+                self.set_index(idx)
+                return
+            idx += step
+
     # -- editing ----------------------------------------------------------
 
     def insert_text(self, text: str) -> None:
@@ -2415,6 +2568,8 @@ class PickerApp(App[Result | None]):
         "up": lambda self: self.set_index(self.index - 1),
         "left": lambda self: self.collapse_selected(),
         "right": lambda self: self.expand_selected(),
+        "ctrl+down": lambda self: self.jump_workspace(1),
+        "ctrl+up": lambda self: self.jump_workspace(-1),
         "ctrl+n": lambda self: self.set_index(self.index + 1),
         "ctrl+p": lambda self: self.set_index(self.index - 1),
         "ctrl+j": lambda self: self.set_index(self.index + 1),
@@ -2452,6 +2607,11 @@ class PickerApp(App[Result | None]):
         "left": lambda self: self.collapse_selected(),
         "right": lambda self: self.expand_selected(),
         "h": lambda self: self.collapse_selected(),
+        "space": lambda self: self.toggle_fold_selected(),
+        "]": lambda self: self.jump_workspace(1),
+        "[": lambda self: self.jump_workspace(-1),
+        "ctrl+down": lambda self: self.jump_workspace(1),
+        "ctrl+up": lambda self: self.jump_workspace(-1),
         "g": lambda self: self._start_pending("g"),
         "G": lambda self: self.set_index(len(self.filtered) - 1),
         "ctrl+d": lambda self: self.set_index(self.index + max(1, self._half_page())),

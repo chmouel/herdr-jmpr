@@ -52,6 +52,12 @@ class Herdr:
             args += ["--workspace", workspace]
         return self.result(*args).get("panes") or []
 
+    def tabs(self, workspace: str | None = None) -> list[dict]:
+        args = ["tab", "list"]
+        if workspace:
+            args += ["--workspace", workspace]
+        return self.result(*args).get("tabs") or []
+
     def status_socket(self) -> str:
         response = self.run("status", "--json")
         candidates = [response]

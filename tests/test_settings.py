@@ -108,6 +108,15 @@ class SettingsTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"HERDR_PLUGIN_CONFIG_DIR": str(self.root)}):
             self.assertEqual(settings_path(), self.root / "config.toml")
 
+    def test_show_tabs_defaults_true_and_validates_boolean(self):
+        self.assertTrue(load_settings(self.root / "missing.toml").show_tabs)
+        cfg = self.root / "config.toml"
+        cfg.write_text("show_tabs = false\n")
+        self.assertFalse(load_settings(cfg).show_tabs)
+        cfg.write_text('show_tabs = "yes"\n')
+        with self.assertRaises(SettingsError):
+            load_settings(cfg)
+
     def test_path_falls_back_to_the_xdg_config_home(self):
         with mock.patch.dict(
             os.environ, {"XDG_CONFIG_HOME": str(self.root)}, clear=False

@@ -7,12 +7,27 @@ import shutil
 import subprocess
 import time
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 from .config import normalize_path, workspace_label
 
 CURRENT_MARK = "◆"
 OPEN_MARK = "●"
+TREE_BRANCH = "├─ "
+TREE_LAST = "└─ "
+
+
+@dataclass(frozen=True)
+class TabEntry:
+    workspace_id: str
+    tab_id: str
+    label: str
+    number: int = 0
+    active: bool = False
+    focused: bool = False
+    agents: tuple[str, ...] = ()
+    agent_status: str = ""
 
 AGENT_ICONS: dict[str, str] = {
     "copilot": "\uec1e",
@@ -58,6 +73,23 @@ def format_agent_badges(agents: tuple[str, ...]) -> str:
         icon = agent_icon(name)
         parts.append(f"{count}*{icon}" if count > 1 else icon)
     return " ".join(parts)
+
+
+def format_tab_agent_badge(agents: tuple[str, ...], status: str = "") -> str:
+    """Format a tab's detected agent(s) with icon, name, and optional status."""
+
+    if not agents:
+        return ""
+    parts: list[str] = []
+    for name, count in Counter(agents).items():
+        icon = agent_icon(name)
+        label = f"{count}*{icon} {name}" if count > 1 else f"{icon} {name}"
+        parts.append(label)
+    badge = " ".join(parts)
+    clean_status = status.strip().lower()
+    if clean_status and clean_status not in ("idle", "none"):
+        badge = f"{badge} · {clean_status}"
+    return badge
 
 
 def data_path() -> Path:
@@ -265,6 +297,189 @@ def agents_by_path(
             if workspace_label(cwd, names) == label:
                 by_path.setdefault(cwd, []).extend(agents)
     return {path: tuple(sorted(agents)) for path, agents in by_path.items()}
+
+
+_AGENT_STATUS_PRIORITY = {"working": 0, "waiting": 1, "attention": 1, "idle": 2}
+
+
+def _pick_agent_status(statuses: list[str]) -> str:
+    cleaned = [s.strip().lower() for s in statuses if s and s.strip()]
+    if not cleaned:
+        return ""
+    cleaned.sort(key=lambda s: (_AGENT_STATUS_PRIORITY.get(s, 3), s))
+    return cleaned[0]
+
+
+def _pane_title(pane: dict) -> str:
+    tokens = pane.get("tokens")
+    if isinstance(tokens, dict):
+        title = str(tokens.get("tl") or "").strip()
+        if title:
+            return title
+    return str(pane.get("terminal_title_stripped") or "").strip()
+
+
+def _workspace_paths(
+    workspace: dict,
+    ws_cwds: dict[str, set[str]],
+    saved_mapping: dict[str, str],
+    names: dict[str, str],
+) -> list[str]:
+    ws_id = workspace.get("workspace_id")
+    label = workspace.get("label")
+    if not ws_id:
+        return []
+    mapped = saved_mapping.get(ws_id)
+    if mapped and workspace_label(mapped, names) == label:
+        return [mapped]
+    checkout = workspace_worktree_path(workspace)
+    if checkout:
+        return [checkout]
+    return [
+        cwd
+        for cwd in sorted(ws_cwds.get(str(ws_id), ()))
+        if workspace_label(cwd, names) == label
+    ]
+
+
+def tabs_by_path(
+    workspaces: list[dict],
+    tabs: list[dict] | None,
+    panes: list[dict],
+    saved_mapping: dict[str, str],
+    names: dict[str, str],
+) -> dict[str, tuple[TabEntry, ...]]:
+    """Map open workspace paths to ordered :class:`TabEntry` tuples with agent detection."""
+
+    ws_cwds: dict[str, set[str]] = {}
+    panes_by_tab: dict[tuple[str, str], list[dict]] = {}
+    for pane in panes:
+        ws_id = pane.get("workspace_id")
+        if not ws_id:
+            continue
+        ws_key = str(ws_id)
+        cwd = pane.get("cwd")
+        if cwd:
+            ws_cwds.setdefault(ws_key, set()).add(cwd)
+        tab_id = pane.get("tab_id")
+        if tab_id:
+            panes_by_tab.setdefault((ws_key, str(tab_id)), []).append(pane)
+
+    tabs_by_ws: dict[str, list[dict]] = {}
+    for tab in tabs or ():
+        ws_id = tab.get("workspace_id")
+        tab_id = tab.get("tab_id")
+        if ws_id and tab_id:
+            tabs_by_ws.setdefault(str(ws_id), []).append(tab)
+
+    by_path: dict[str, list[TabEntry]] = {}
+    for workspace in workspaces:
+        ws_id = workspace.get("workspace_id")
+        if not ws_id:
+            continue
+        ws_key = str(ws_id)
+        paths = _workspace_paths(workspace, ws_cwds, saved_mapping, names)
+        if not paths:
+            continue
+        active_tab_id = str(workspace.get("active_tab_id") or "")
+        raw_tabs = tabs_by_ws.get(ws_key)
+        entries: list[TabEntry] = []
+        if raw_tabs:
+            ordered = sorted(
+                raw_tabs,
+                key=lambda t: (int(t.get("number") or 0), str(t.get("tab_id") or "")),
+            )
+            for tab in ordered:
+                tab_id = str(tab.get("tab_id") or "")
+                tab_panes = panes_by_tab.get((ws_key, tab_id), [])
+                agents = tuple(
+                    sorted(
+                        str(pane["agent"])
+                        for pane in tab_panes
+                        if pane.get("agent") is not None
+                    )
+                )
+                statuses = [str(tab.get("agent_status") or "")]
+                statuses.extend(
+                    str(pane.get("agent_status") or "")
+                    for pane in tab_panes
+                    if pane.get("agent") is not None
+                )
+                agent_status = _pick_agent_status(statuses) if agents else ""
+                label = str(tab.get("label") or "").strip()
+                if not label:
+                    for pane in tab_panes:
+                        title = _pane_title(pane)
+                        if title:
+                            label = title
+                            break
+                if not label:
+                    number = int(tab.get("number") or 0)
+                    label = f"tab {number}" if number else tab_id
+                focused = bool(tab.get("focused"))
+                entries.append(
+                    TabEntry(
+                        workspace_id=ws_key,
+                        tab_id=tab_id,
+                        label=label,
+                        number=int(tab.get("number") or 0),
+                        active=focused or (bool(active_tab_id) and tab_id == active_tab_id),
+                        focused=focused,
+                        agents=agents,
+                        agent_status=agent_status,
+                    )
+                )
+        else:
+            # Fallback when tab list wasn't provided: synthesize from panes.
+            tab_ids = sorted(
+                {tab_id for (pane_ws, tab_id) in panes_by_tab if pane_ws == ws_key}
+            )
+            for idx, tab_id in enumerate(tab_ids, 1):
+                tab_panes = panes_by_tab.get((ws_key, tab_id), [])
+                agents = tuple(
+                    sorted(
+                        str(pane["agent"])
+                        for pane in tab_panes
+                        if pane.get("agent") is not None
+                    )
+                )
+                statuses = [
+                    str(pane.get("agent_status") or "")
+                    for pane in tab_panes
+                    if pane.get("agent") is not None
+                ]
+                agent_status = _pick_agent_status(statuses) if agents else ""
+                label = ""
+                for pane in tab_panes:
+                    title = _pane_title(pane)
+                    if title:
+                        label = title
+                        break
+                if not label:
+                    label = f"tab {idx}"
+                focused = any(bool(pane.get("focused")) for pane in tab_panes)
+                entries.append(
+                    TabEntry(
+                        workspace_id=ws_key,
+                        tab_id=tab_id,
+                        label=label,
+                        number=idx,
+                        active=focused or (bool(active_tab_id) and tab_id == active_tab_id),
+                        focused=focused,
+                        agents=agents,
+                        agent_status=agent_status,
+                    )
+                )
+        if not entries:
+            continue
+        for target_path in paths:
+            existing = by_path.setdefault(target_path, [])
+            seen_ids = {item.tab_id for item in existing}
+            for entry in entries:
+                if entry.tab_id not in seen_ids:
+                    existing.append(entry)
+                    seen_ids.add(entry.tab_id)
+    return {path: tuple(items) for path, items in by_path.items()}
 
 
 def _cached_git_root(path: str, cache: dict[str, str | None]) -> str | None:

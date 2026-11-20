@@ -114,7 +114,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(
             stderr.strip(),
-            "usage: herdr-zshz [--move-pane|--move-tab] [--all] [--backend <backend>]",
+            "usage: herdr-zshz [--move-pane|--move-tab] [--all] [--tabs|--no-tabs] [--backend <backend>]",
         )
 
     def test_backend_flag_validation_and_open_picker_forwarding(self):
@@ -536,3 +536,16 @@ class JumpTest(unittest.TestCase):
         )
         self.assertIn(["workspace", "focus", "w-moved"], fake.calls())
         self.assertIn(["tab", "focus", "t-new"], fake.calls())
+
+    def test_jump_focuses_target_tab_when_selected(self):
+        fake = self.fake(
+            workspaces=[{"workspace_id": "w1", "label": "proj", "active_tab_id": "t1"}]
+        )
+        result = self.result(
+            kind="jump",
+            target_workspace_id="w1",
+            target_tab_id="t2",
+        )
+        self.assertEqual(self.run_jump(result, fake), 0)
+        self.assertIn(["workspace", "focus", "w1"], fake.calls())
+        self.assertIn(["tab", "focus", "t2"], fake.calls())

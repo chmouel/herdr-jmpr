@@ -6,7 +6,7 @@ import asyncio
 import os
 import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from rich.cells import cell_len
 from rich.style import Style
@@ -28,13 +28,18 @@ from .config import normalize_path, workspace_label
 from .frecency import (
     CURRENT_MARK,
     OPEN_MARK,
+    TREE_BRANCH,
+    TREE_LAST,
+    TabEntry,
     agent_icon,
     agents_by_path,
     current_project,
     display_path,
     format_agent_badges,
+    format_tab_agent_badge,
     open_paths,
     rank_paths,
+    tabs_by_path,
     workspace_worktree_path,
 )
 from .herdr import Herdr, HerdrError
@@ -45,7 +50,7 @@ from .picker import (
     resolve_typed_or_picked,
     unknown_workspaces,
 )
-from .query import match_parsed, parse
+from .query import match_parsed, parse, score_match
 from .settings import SettingsError, herdr_theme_name
 from .state import StateError, snapshot_close_targets
 
@@ -157,6 +162,13 @@ class Row:
     marker: str
     label: str
     agents: tuple[str, ...] = ()
+    workspace_id: str = ""
+    tab_id: str = ""
+    is_tab: bool = False
+    tree_prefix: str = ""
+    agent_status: str = ""
+    tab_active: bool = False
+    tab_focused: bool = False
 
 
 @dataclass(frozen=True)
@@ -515,6 +527,81 @@ class RowList(ScrollView, can_focus=False):
         pointer_style = f"bold {palette.primary}" if keep_tokens else "bold"
         line.append(f"{self.POINTER} " if selected else "  ", style=pointer_style)
 
+        if row.is_tab:
+            prefix = f"  {row.tree_prefix or TREE_LAST}"
+            line.append(prefix, style=palette.muted if keep_tokens else "")
+            if row.tab_focused:
+                mark = CURRENT_MARK
+                mark_style = f"bold {palette.warning}" if keep_tokens else "bold"
+            elif row.tab_active:
+                mark = OPEN_MARK
+                mark_style = f"bold {palette.success}" if keep_tokens else "bold"
+            else:
+                mark = " "
+                mark_style = ""
+            line.append(mark, style=mark_style)
+            line.append(" ")
+
+            shown = row.shown
+            shown_text = Text(shown)
+            if keep_tokens:
+                base_style = (
+                    f"bold {palette.foreground}".strip()
+                    if (selected or row.tab_focused or row.tab_active)
+                    else palette.foreground
+                )
+                if base_style:
+                    shown_text.stylize(base_style, 0, len(shown))
+            elif selected:
+                shown_text.stylize("bold", 0, len(shown))
+
+            match_style = (
+                f"bold underline {palette.warning}"
+                if keep_tokens
+                else "bold underline"
+            )
+            for start, end in self.spans[index]:
+                start = max(0, min(start, len(shown)))
+                end = max(start, min(end, len(shown)))
+                if end > start:
+                    shown_text.stylize(match_style, start, end)
+
+            prefix_width = line.cell_len
+            badge = (
+                format_tab_agent_badge(row.agents, row.agent_status)
+                if row.agents
+                else ""
+            )
+            badge_width = cell_len(badge) if badge else 0
+            if badge and width and (width - prefix_width - badge_width - 2 <= 6):
+                badge = format_agent_badges(row.agents)
+                badge_width = cell_len(badge)
+            show_badge = bool(badge) and (
+                not width or (width - prefix_width - badge_width - 2 > 4)
+            )
+            if width:
+                avail = width - prefix_width - (badge_width + 2 if show_badge else 0)
+                shown_text = self._middle_truncate(
+                    shown_text, avail, palette.muted if keep_tokens else ""
+                )
+            line.append_text(shown_text)
+
+            if show_badge:
+                gap = max(2, width - line.cell_len - badge_width) if width else 2
+                line.append(" " * gap)
+                if not keep_tokens:
+                    badge_style = "bold"
+                elif row.agent_status in ("working", "waiting", "attention"):
+                    badge_style = f"bold {palette.warning}"
+                else:
+                    badge_style = f"bold {palette.secondary}"
+                line.append(badge, style=badge_style)
+            if width:
+                line.truncate(width, overflow="ellipsis", pad=selected)
+            if selected:
+                line.stylize(self.selected_row_style)
+            return line
+
         if row.marker == CURRENT_MARK:
             marker_style = f"bold {palette.warning}" if keep_tokens else "bold"
         elif row.marker == OPEN_MARK:
@@ -728,6 +815,7 @@ HELP_GROUPS = [
             ("alt-t", "move tab here"),
             ("alt-a", "git / all dirs"),
             ("alt-o", "open workspaces"),
+            ("alt-e", "toggle tab tree"),
             ("alt-v", "toggle preview"),
             ("ctrl-t", "switch theme"),
             ("ctrl-x", "close workspace"),
@@ -754,7 +842,7 @@ HELP_GROUPS = [
             ("H M L", "top / mid / bottom"),
             ("i a /", "insert mode"),
             ("dd", "clear query"),
-            ("o", "open workspaces"),
+            ("o e", "open / tab tree"),
             ("v", "toggle preview"),
             ("T", "switch theme"),
             ("x", "close workspace"),
@@ -976,6 +1064,8 @@ class PickerApp(App[Result | None]):
         workspaces: list[dict] | None = None,
         panes: list[dict] | None = None,
         agents: dict[str, tuple[str, ...]] | None = None,
+        tabs: dict[str, tuple[TabEntry, ...]] | None = None,
+        show_tabs: bool = True,
     ) -> None:
         super().__init__()
         self._ui_mounted = False
@@ -997,6 +1087,8 @@ class PickerApp(App[Result | None]):
             self.agents = agents_by_path(
                 workspaces, panes, self.safe_mapping(), names
             )
+        self.tabs: dict[str, tuple[TabEntry, ...]] = dict(tabs) if tabs else {}
+        self.show_tabs = show_tabs
         self.mode = start_mode if start_mode in ("insert", "normal") else "insert"
         self.query = ""
         self.cursor = 0
@@ -1152,6 +1244,7 @@ class PickerApp(App[Result | None]):
 
     def build_rows(self) -> list[Row]:
         rows = []
+        include_tabs = self.show_tabs and self.move_mode is None
         for path in self.active_paths():
             label = workspace_label(path, self.names)
             shown = display_path(path)
@@ -1174,6 +1267,29 @@ class PickerApp(App[Result | None]):
                     agents=self.agents.get(path, ()),
                 )
             )
+            if include_tabs:
+                tab_entries = self.tabs.get(path) or ()
+                for index, tab in enumerate(tab_entries):
+                    rows.append(
+                        Row(
+                            path=path,
+                            shown=tab.label,
+                            marker=" ",
+                            label=label,
+                            agents=tab.agents,
+                            workspace_id=tab.workspace_id,
+                            tab_id=tab.tab_id,
+                            is_tab=True,
+                            tree_prefix=(
+                                TREE_LAST
+                                if index == len(tab_entries) - 1
+                                else TREE_BRANCH
+                            ),
+                            agent_status=tab.agent_status,
+                            tab_active=tab.active,
+                            tab_focused=tab.focused,
+                        )
+                    )
         return rows
 
     def set_rows(self) -> None:
@@ -1193,27 +1309,112 @@ class PickerApp(App[Result | None]):
         scope_tip = "type a path to open" if self.scope == "all" else "press M-a for all dirs"
         return (f"  No matching workspaces \u00b7 {scope_tip}", palette.muted)
 
+    def _group_row_trees(self) -> list[tuple[Row, list[Row]]]:
+        trees: list[tuple[Row, list[Row]]] = []
+        for row in self.rows:
+            if row.is_tab and trees:
+                trees[-1][1].append(row)
+            else:
+                trees.append((row, []))
+        return trees
+
+    @staticmethod
+    def _match_tab_row(groups: list, row: Row) -> list[tuple[int, int]] | None:
+        spans = match_parsed(groups, row.shown)
+        if spans is not None:
+            return sorted(spans)
+        if not row.agents:
+            return None
+        searchable = f"{row.shown} {' '.join(row.agents)} {row.agent_status} agent"
+        spans = match_parsed(groups, searchable)
+        if spans is None:
+            return None
+        limit = len(row.shown)
+        return sorted(
+            (start, min(end, limit)) for start, end in spans if start < limit
+        )
+
     def apply_filter(self, keep_selection: bool = False) -> None:
         previous = (
-            self.filtered[self.index].path
+            (self.filtered[self.index].path, self.filtered[self.index].tab_id)
             if self.filtered and self.index < len(self.filtered)
             else None
         )
         self.filtered = []
         self.spans = []
         groups = parse(self.query)
-        for row in self.rows:
-            spans = match_parsed(groups, row.shown)
-            if spans is not None:
+        if not groups:
+            for row in self.rows:
                 self.filtered.append(row)
-                self.spans.append(sorted(spans))
+                self.spans.append([])
+        else:
+            ranked: list[
+                tuple[tuple[int, int], Row, list[tuple[int, int]], list[tuple[Row, list[tuple[int, int]]]]]
+            ] = []
+            for base_rank, (parent, children) in enumerate(self._group_row_trees()):
+                parent_spans = match_parsed(groups, parent.shown)
+                matched_children: list[tuple[Row, list[tuple[int, int]]]] = []
+                for child in children:
+                    child_spans = self._match_tab_row(groups, child)
+                    if child_spans is not None:
+                        matched_children.append((child, child_spans))
+                if parent_spans is None and not matched_children:
+                    continue
+                if matched_children:
+                    visible_children = [
+                        (
+                            replace(
+                                child,
+                                tree_prefix=(
+                                    TREE_LAST
+                                    if idx == len(matched_children) - 1
+                                    else TREE_BRANCH
+                                ),
+                            ),
+                            spans,
+                        )
+                        for idx, (child, spans) in enumerate(matched_children)
+                    ]
+                else:
+                    visible_children = [(child, []) for child in children]
+                score = score_match(
+                    parent_spans,
+                    parent.shown,
+                    is_open=(parent.marker == OPEN_MARK),
+                    is_current=(parent.marker == CURRENT_MARK),
+                    tab_match=bool(matched_children),
+                )
+                ranked.append(
+                    (
+                        (-score, base_rank),
+                        parent,
+                        sorted(parent_spans) if parent_spans else [],
+                        visible_children,
+                    )
+                )
+            has_open_match = any(
+                parent.marker in (OPEN_MARK, CURRENT_MARK) for _, parent, _, _ in ranked
+            )
+            if has_open_match:
+                ranked.sort(key=lambda item: item[0])
+            for _, parent, parent_spans, visible_children in ranked:
+                self.filtered.append(parent)
+                self.spans.append(parent_spans)
+                for child, child_spans in visible_children:
+                    self.filtered.append(child)
+                    self.spans.append(child_spans)
         if keep_selection and previous is not None:
             for index, row in enumerate(self.filtered):
-                if row.path == previous:
+                if (row.path, row.tab_id) == previous:
                     self.index = index
                     break
             else:
-                self.index = 0
+                for index, row in enumerate(self.filtered):
+                    if row.path == previous[0] and not row.is_tab:
+                        self.index = index
+                        break
+                else:
+                    self.index = 0
         self.index = max(0, min(self.index, len(self.filtered) - 1))
         palette = self.palette()
         self.row_list.set_rows(
@@ -1908,19 +2109,38 @@ class PickerApp(App[Result | None]):
 
     @work(exclusive=True)
     async def accept(self) -> None:
-        target = self.accept_target()
-        if target is None:
-            return
+        typed = self.typed_target()
+        if typed:
+            target = typed
+            target_tab_id = ""
+            target_workspace_id = ""
+        else:
+            row = self.selected_row()
+            if row is None:
+                return
+            target = row.path
+            target_tab_id = row.tab_id if row.is_tab else ""
+            target_workspace_id = row.workspace_id if row.is_tab else ""
         try:
             result = await asyncio.to_thread(
-                build_result, target, self.move_mode, self.src_pane, self.herdr, None
+                build_result,
+                target,
+                self.move_mode,
+                self.src_pane,
+                self.herdr,
+                None,
+                target_tab_id=target_tab_id,
+                target_workspace_id=target_workspace_id,
             )
         except (PickerError, HerdrError) as error:
             self.set_error(str(error))
             return
-        choice = await self.resolve_choice(target)
-        if choice is CANCELLED:
-            return
+        if target_workspace_id and not self.move_mode:
+            choice = None
+        else:
+            choice = await self.resolve_choice(target)
+            if choice is CANCELLED:
+                return
         result.choice = choice
         self.exit(result)
 
@@ -2009,6 +2229,15 @@ class PickerApp(App[Result | None]):
         )
         return close_ids, agent_tuples
 
+    async def _herdr_tabs(self) -> list[dict]:
+        tabs_fn = getattr(self.herdr, "tabs", None)
+        if not callable(tabs_fn):
+            return []
+        try:
+            return await asyncio.to_thread(tabs_fn)
+        except HerdrError:
+            return []
+
     async def refresh_workspace_state(self) -> None:
         try:
             workspaces, panes = await self.herdr_state()
@@ -2016,10 +2245,13 @@ class PickerApp(App[Result | None]):
             self.set_error(str(error))
             self.set_rows()
             return
+        raw_tabs = await self._herdr_tabs()
         mapping = self.safe_mapping()
         self.opened = open_paths(workspaces, panes, mapping, self.names)
         self.current = current_project(self.src_pane, panes, workspaces, mapping, self.names)
         self.agents = agents_by_path(workspaces, panes, mapping, self.names)
+        if raw_tabs or self.tabs:
+            self.tabs = tabs_by_path(workspaces, raw_tabs, panes, mapping, self.names)
         if self.history is not None:
             self.paths["git"] = rank_paths(self.history, self.current, self.opened, False)
             self.paths["all"] = rank_paths(self.history, self.current, self.opened, True)
@@ -2063,6 +2295,10 @@ class PickerApp(App[Result | None]):
             self._previous_scope = self.scope
             self.scope = "open"
         self.index = 0
+        self.set_rows()
+
+    def toggle_tabs(self) -> None:
+        self.show_tabs = not self.show_tabs
         self.set_rows()
 
     # -- editing ----------------------------------------------------------
@@ -2178,6 +2414,7 @@ class PickerApp(App[Result | None]):
         "alt+t": lambda self: self.start_move("tab"),
         "alt+a": lambda self: self.toggle_all(),
         "alt+o": lambda self: self.toggle_open_scope(),
+        "alt+e": lambda self: self.toggle_tabs(),
         "alt+v": lambda self: self.toggle_preview(),
         "ctrl+t": lambda self: self.open_theme_picker(),
         "enter": lambda self: self.accept(),
@@ -2208,6 +2445,7 @@ class PickerApp(App[Result | None]):
         "p": lambda self: self.start_move("pane"),
         "t": lambda self: self.start_move("tab"),
         "o": lambda self: self.toggle_open_scope(),
+        "e": lambda self: self.toggle_tabs(),
         "l": lambda self: self.accept(),
         "?": lambda self: self.show_help(),
         "q": lambda self: self.exit(None),
@@ -2218,6 +2456,7 @@ class PickerApp(App[Result | None]):
         "alt+t": lambda self: self.start_move("tab"),
         "alt+a": lambda self: self.toggle_all(),
         "alt+o": lambda self: self.toggle_open_scope(),
+        "alt+e": lambda self: self.toggle_tabs(),
         "alt+v": lambda self: self.toggle_preview(),
         "ctrl+t": lambda self: self.open_theme_picker(),
         "enter": lambda self: self.accept(),

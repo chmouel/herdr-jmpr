@@ -8,7 +8,7 @@ from rich.cells import cell_len
 from textual.app import App
 from textual.worker import NoActiveWorker, get_current_worker
 
-from herdr_zshz.frecency import agent_icon, format_agent_badges, rank_paths
+from herdr_zshz.frecency import TabEntry, agent_icon, format_agent_badges, rank_paths
 from herdr_zshz.settings import SettingsError
 from herdr_zshz.state import StateError
 from herdr_zshz.tui import (
@@ -1522,6 +1522,116 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertTrue(app.query_one("#preview").display)
 
+
+class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.open_ws = self.root / "api" / "frontend"
+        self.open_ws.mkdir(parents=True)
+        self.closed_exact = self.root / "api"
+        self.closed_sub = self.root / "my-api"
+        self.closed_sub.mkdir(parents=True)
+        self.tabs = {
+            str(self.open_ws): (
+                TabEntry(
+                    workspace_id="w1",
+                    tab_id="w1:t1",
+                    label="Analyze Local Changes",
+                    number=1,
+                    active=True,
+                    focused=True,
+                    agents=("pi",),
+                    agent_status="working",
+                ),
+                TabEntry(
+                    workspace_id="w1",
+                    tab_id="w1:t2",
+                    label="zsh",
+                    number=2,
+                ),
+            )
+        }
+
+    def make_app(self, **overrides):
+        params = dict(
+            paths_git=[str(self.open_ws), str(self.closed_sub), str(self.closed_exact)],
+            paths_all=[str(self.open_ws), str(self.closed_sub), str(self.closed_exact)],
+            current=None,
+            opened={str(self.open_ws)},
+            names={},
+            herdr=FakeHerdr(),
+            mapping_reader=lambda: {"w1": str(self.open_ws)},
+            src_pane="w1:p1",
+            tabs=self.tabs,
+        )
+        params.update(overrides)
+        return PickerApp(**params)
+
+    async def test_unicode_tab_tree_renders_agent_and_jumps_to_tab(self):
+        app = self.make_app()
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            self.assertEqual(len(app.filtered), 5)
+            self.assertFalse(app.filtered[0].is_tab)
+            self.assertTrue(app.filtered[1].is_tab)
+            self.assertEqual(app.filtered[1].tree_prefix, "├─ ")
+            self.assertEqual(app.filtered[2].tree_prefix, "└─ ")
+
+            tab_line = app.row_list._row_text(1, 90).plain
+            self.assertIn("├─ ", tab_line)
+            self.assertIn("Analyze Local Changes", tab_line)
+            self.assertIn("\u03c0 pi \u00b7 working", tab_line)
+
+            shell_line = app.row_list._row_text(2, 90).plain
+            self.assertIn("└─ ", shell_line)
+            self.assertIn("zsh", shell_line)
+            self.assertNotIn("\u03c0", shell_line)
+
+            await pilot.press("down")
+            await pilot.press("enter")
+            await pilot.pause()
+        self.assertIsNotNone(app.return_value)
+        assert app.return_value is not None
+        self.assertEqual(app.return_value.kind, "jump")
+        self.assertEqual(app.return_value.path, str(self.open_ws))
+        self.assertEqual(app.return_value.target_workspace_id, "w1")
+        self.assertEqual(app.return_value.target_tab_id, "w1:t1")
+
+    async def test_toggle_tabs_and_filter_by_agent_or_tab_label(self):
+        app = self.make_app()
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            await pilot.press("alt+e")
+            await pilot.pause()
+            self.assertFalse(any(row.is_tab for row in app.filtered))
+            await pilot.press("alt+e")
+            await pilot.pause()
+            self.assertTrue(any(row.is_tab for row in app.filtered))
+
+            # Searching by agent keyword keeps only the parent workspace + matching tab with └
+            app.insert_text("agent")
+            await pilot.pause()
+            self.assertEqual(len(app.filtered), 2)
+            self.assertFalse(app.filtered[0].is_tab)
+            self.assertEqual(app.filtered[0].path, str(self.open_ws))
+            self.assertTrue(app.filtered[1].is_tab)
+            self.assertEqual(app.filtered[1].tab_id, "w1:t1")
+            self.assertEqual(app.filtered[1].tree_prefix, "└─ ")
+
+    async def test_open_rated_higher_most_of_the_time_on_filter(self):
+        # Closed exact basename 'api' beats weak open path match '~/.../api/frontend',
+        # while open '~/.../api/frontend' still beats closed non-exact 'my-api'.
+        app = self.make_app(show_tabs=False)
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            app.insert_text("api")
+            await pilot.pause()
+            self.assertEqual(
+                [row.path for row in app.filtered],
+                [str(self.closed_exact), str(self.open_ws), str(self.closed_sub)],
+            )
 
 
 if __name__ == "__main__":

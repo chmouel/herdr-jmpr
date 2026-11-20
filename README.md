@@ -75,6 +75,11 @@ start_mode = "insert"
 # History source: "auto" (default, prefers zsh-z and falls back to zoxide),
 # "zshz", or "zoxide".
 history = "auto"
+
+# Show open workspace tabs as a Unicode tree with agent badges and direct tab
+# jumping (default: true). Override per invocation with --tabs / --no-tabs or
+# toggle live in Textual with alt-e (e in normal mode).
+show_tabs = true
 ```
 
 You can also override the backend per invocation with `--backend <name>` (both

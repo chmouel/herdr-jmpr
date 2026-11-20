@@ -17,7 +17,7 @@ BACKENDS = ("textual", "auto", "fzf", "skim", "gum")
 START_MODES = ("insert", "normal")
 HISTORY_SOURCES = ("auto", "zshz", "zoxide")
 
-KNOWN_KEYS = {"backend", "start_mode", "theme", "history"}
+KNOWN_KEYS = {"backend", "start_mode", "theme", "history", "show_tabs"}
 
 
 class SettingsError(Exception):
@@ -34,6 +34,8 @@ class Settings:
     theme: str = "auto"
     # Frecency source: "auto" prefers zsh-z and falls back to zoxide.
     history: str = "auto"
+    # Show open workspace tabs as a Unicode tree under each open workspace.
+    show_tabs: bool = True
 
 
 def settings_path() -> Path:
@@ -95,9 +97,13 @@ def load_settings(path: Path | None = None) -> Settings:
     if not isinstance(history, str) or history not in HISTORY_SOURCES:
         allowed = ", ".join(repr(item) for item in HISTORY_SOURCES)
         raise SettingsError(f"Invalid {path}: history must be one of {allowed}")
+    show_tabs = data.get("show_tabs", Settings.show_tabs)
+    if not isinstance(show_tabs, bool):
+        raise SettingsError(f"Invalid {path}: show_tabs must be a boolean")
     return Settings(
         backend=backend,
         start_mode=start_mode,
         theme=theme.strip(),
         history=history,
+        show_tabs=show_tabs,
     )

@@ -7,17 +7,20 @@ from unittest import mock
 
 from herdr_zshz import frecency
 from herdr_zshz.frecency import (
+    TabEntry,
     agent_icon,
     agents_by_path,
     current_project,
     data_path,
     display_path,
     format_agent_badges,
+    format_tab_agent_badge,
     git_root,
     open_paths,
     rank_paths,
     read_history,
     score,
+    tabs_by_path,
 )
 
 
@@ -215,6 +218,82 @@ class FrecencyTest(unittest.TestCase):
         self.assertIsNone(current_project("w9A:p1", panes, workspaces, {}, {}))
         self.assertEqual(rank_paths([], None, opened, show_all=False), [str(wt)])
         self.assertEqual(rank_paths([], None, opened, show_all=True), [str(wt)])
+
+    def test_tabs_by_path_orders_tabs_and_detects_agents(self):
+        repo = self.root / "raffi"
+        repo.mkdir()
+        workspaces = [
+            {
+                "workspace_id": "w1",
+                "label": "raffi",
+                "active_tab_id": "w1:t1",
+            }
+        ]
+        tabs = [
+            {
+                "workspace_id": "w1",
+                "tab_id": "w1:t2",
+                "label": "zsh",
+                "number": 2,
+                "focused": False,
+                "agent_status": None,
+            },
+            {
+                "workspace_id": "w1",
+                "tab_id": "w1:t1",
+                "label": "Analyze Local Changes",
+                "number": 1,
+                "focused": True,
+                "agent_status": "working",
+            },
+        ]
+        panes = [
+            {
+                "workspace_id": "w1",
+                "tab_id": "w1:t1",
+                "pane_id": "w1:p1",
+                "cwd": str(repo),
+                "agent": "pi",
+                "agent_status": "working",
+            },
+            {
+                "workspace_id": "w1",
+                "tab_id": "w1:t2",
+                "pane_id": "w1:p2",
+                "cwd": str(repo),
+                "agent": None,
+            },
+        ]
+        result = tabs_by_path(workspaces, tabs, panes, {"w1": str(repo)}, {})
+        self.assertEqual(
+            result[str(repo)],
+            (
+                TabEntry(
+                    workspace_id="w1",
+                    tab_id="w1:t1",
+                    label="Analyze Local Changes",
+                    number=1,
+                    active=True,
+                    focused=True,
+                    agents=("pi",),
+                    agent_status="working",
+                ),
+                TabEntry(
+                    workspace_id="w1",
+                    tab_id="w1:t2",
+                    label="zsh",
+                    number=2,
+                    active=False,
+                    focused=False,
+                    agents=(),
+                    agent_status="",
+                ),
+            ),
+        )
+        self.assertEqual(
+            format_tab_agent_badge(("pi",), "working"), "\u03c0 pi \u00b7 working"
+        )
+        self.assertEqual(format_tab_agent_badge(("claude",), "idle"), "\u273b claude")
 
 
 if __name__ == "__main__":

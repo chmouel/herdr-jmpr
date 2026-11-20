@@ -93,3 +93,49 @@ def match_parsed(groups: list[list[Term]], text: str) -> list[tuple[int, int]] |
 
 def matches(query: str, text: str) -> bool:
     return match_spans(query, text) is not None
+
+
+def score_match(
+    spans: list[tuple[int, int]] | None,
+    text: str,
+    *,
+    is_open: bool = False,
+    is_current: bool = False,
+    tab_match: bool = False,
+) -> int:
+    """Rank a matched row, rating currently open workspaces higher most of the time.
+
+    Returns a tier score (higher sorts first, ties preserve frecency order):
+    - 4: current project with direct basename/alias match
+    - 3: open workspace with direct basename/alias match
+    - 2: closed directory with an exact basename match (beats weak open matches)
+    - 1: open/current workspace matched only via parent path or a child tab
+    - 0: closed directory with a non-exact match
+    """
+
+    exact_basename = False
+    strong_match = False
+    if spans:
+        suffix_start = text.rfind("  [")
+        if suffix_start != -1 and text.endswith("]"):
+            body_end = suffix_start
+        else:
+            suffix_start = -1
+            body_end = len(text)
+        dir_end = text.rfind("/", 0, body_end) + 1
+        for start, end in spans:
+            if start == dir_end and end == body_end and body_end > dir_end:
+                exact_basename = True
+                strong_match = True
+            elif start >= dir_end and end <= body_end:
+                strong_match = True
+            elif suffix_start != -1 and start >= suffix_start:
+                strong_match = True
+
+    if is_current:
+        return 4 if strong_match else 1
+    if is_open:
+        return 3 if strong_match else 1
+    if exact_basename and not tab_match:
+        return 2
+    return 0

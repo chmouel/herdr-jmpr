@@ -1,6 +1,6 @@
 import unittest
 
-from herdr_zshz.query import match_spans, matches, parse
+from herdr_zshz.query import match_spans, matches, parse, score_match
 
 
 class ParseTest(unittest.TestCase):
@@ -82,6 +82,31 @@ class MatchTest(unittest.TestCase):
 
     def test_spans_are_per_clause(self):
         self.assertEqual(match_spans("pro ject", "project"), [(0, 3), (3, 7)])
+
+    def test_score_match_rates_open_higher_most_of_the_time(self):
+        # Open basename match beats closed exact basename match.
+        open_direct = score_match(
+            match_spans("raffi", "~/git/raffi"), "~/git/raffi", is_open=True
+        )
+        closed_exact = score_match(
+            match_spans("raffi", "~/git/raffi"), "~/git/raffi", is_open=False
+        )
+        self.assertGreater(open_direct, closed_exact)
+
+        # Open weak path/tab match beats ordinary closed non-exact match...
+        open_weak = score_match(
+            match_spans("api", "~/api/frontend"), "~/api/frontend", is_open=True
+        )
+        closed_sub = score_match(
+            match_spans("api", "~/git/my-api"), "~/git/my-api", is_open=False
+        )
+        self.assertGreater(open_weak, closed_sub)
+
+        # ...but a closed exact basename match beats a weak open path/tab match.
+        closed_exact_api = score_match(
+            match_spans("api", "~/git/api"), "~/git/api", is_open=False
+        )
+        self.assertGreater(closed_exact_api, open_weak)
 
 
 if __name__ == "__main__":

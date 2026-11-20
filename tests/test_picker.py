@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from herdr_zshz import picker
+from herdr_zshz.frecency import TabEntry
 from herdr_zshz.herdr import Herdr
 
 
@@ -339,6 +340,45 @@ class CliBackendsExecutionTest(unittest.TestCase):
             )
         assert result is not None
         self.assertEqual(result.path, str(self.beta))
+
+    def test_ansi_rows_render_unicode_tab_tree_and_agent_badge(self):
+        tabs = {
+            str(self.alpha): (
+                TabEntry(
+                    workspace_id="w1",
+                    tab_id="w1:t1",
+                    label="Review PR",
+                    number=1,
+                    active=True,
+                    focused=True,
+                    agents=("pi",),
+                    agent_status="working",
+                ),
+                TabEntry(
+                    workspace_id="w1",
+                    tab_id="w1:t2",
+                    label="zsh",
+                    number=2,
+                ),
+            )
+        }
+        rendered = picker.format_ansi_rows(
+            [str(self.alpha)],
+            current=None,
+            opened={str(self.alpha)},
+            names={},
+            tabs=tabs,
+        )
+        lines = rendered.splitlines()
+        self.assertEqual(len(lines), 3)
+        self.assertIn("├─ ", picker.ANSI_RE.sub("", lines[1]))
+        self.assertIn("Review PR", picker.ANSI_RE.sub("", lines[1]))
+        self.assertIn("\u03c0 pi \u00b7 working", picker.ANSI_RE.sub("", lines[1]))
+        self.assertIn("└─ ", picker.ANSI_RE.sub("", lines[2]))
+        self.assertEqual(
+            picker.split_picked_target(lines[1].split("\t", 1)[1]),
+            (str(self.alpha), "w1", "w1:t1"),
+        )
 
 
 if __name__ == "__main__":

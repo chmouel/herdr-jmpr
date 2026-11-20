@@ -20,6 +20,7 @@ from .frecency import (
     open_paths,
     rank_paths,
     read_history,
+    tabs_by_path,
     workspace_worktree_path,
 )
 from .herdr import Herdr, HerdrError, layout_ops
@@ -51,8 +52,11 @@ from .state import (
     write_state,
 )
 
-USAGE = "usage: herdr-zshz [--move-pane|--move-tab] [--all] [--backend <backend>]"
+USAGE = (
+    "usage: herdr-zshz [--move-pane|--move-tab] [--all] [--tabs|--no-tabs] [--backend <backend>]"
+)
 PLUGIN_ID = "herdr-zshz"
+SHOW_TABS_ENV = "HERDR_ZSHZ_SHOW_TABS"
 
 
 class Failure(Exception):
@@ -136,7 +140,10 @@ def socket_path(herdr: Herdr) -> str:
 
 
 def open_picker(
-    move_mode: str | None, show_all: bool, backend_override: str | None = None
+    move_mode: str | None,
+    show_all: bool,
+    backend_override: str | None = None,
+    show_tabs_override: bool | None = None,
 ) -> int:
     if move_mode == "pane":
         entrypoint = "move-pane"
@@ -164,6 +171,8 @@ def open_picker(
         command += ["--env", f"HERDR_ACTIVE_PANE_ID={pane_id}"]
     if backend_override:
         command += ["--env", f"{BACKEND_ENV}={backend_override}"]
+    if show_tabs_override is not None:
+        command += ["--env", f"{SHOW_TABS_ENV}={'1' if show_tabs_override else '0'}"]
     completed = subprocess.run(
         command,
         stdin=subprocess.DEVNULL,
@@ -317,9 +326,16 @@ def jump(
         panes = herdr.panes()
         live_ids = {str(workspace.get("workspace_id")) for workspace in workspaces}
         state = recover(read_mapping(path), socket, instance, live_ids)
-        destination, tab_id = resolve_and_move(
-            result, target, label, state, workspaces, panes, herdr
-        )
+        target_ws_id = getattr(result, "target_workspace_id", "") or ""
+        target_tab_id = getattr(result, "target_tab_id", "") or ""
+        if result.kind == "jump" and target_tab_id and target_ws_id in live_ids:
+            destination, tab_id = target_ws_id, target_tab_id
+        else:
+            destination, tab_id = resolve_and_move(
+                result, target, label, state, workspaces, panes, herdr
+            )
+            if result.kind == "jump" and target_tab_id and not tab_id:
+                tab_id = target_tab_id
         if result.kind != "jump":
             tab_id = ""
             if destination != result.src_ws:
@@ -338,11 +354,30 @@ def jump(
     return 0
 
 
-def _fetch_herdr_state(herdr: Herdr) -> tuple[list[dict], list[dict]]:
-    with ThreadPoolExecutor(max_workers=2) as pool:
+def _safe_tabs(herdr: Herdr) -> list[dict]:
+    try:
+        return herdr.tabs()
+    except HerdrError:
+        return []
+
+
+def _fetch_herdr_state(herdr: Herdr) -> tuple[list[dict], list[dict], list[dict]]:
+    with ThreadPoolExecutor(max_workers=3) as pool:
         ws_future = pool.submit(herdr.workspaces)
         panes_future = pool.submit(herdr.panes)
-        return ws_future.result(), panes_future.result()
+        tabs_future = pool.submit(_safe_tabs, herdr)
+        return ws_future.result(), panes_future.result(), tabs_future.result()
+
+
+def _resolve_show_tabs(settings: Settings, override: bool | None) -> bool:
+    if override is not None:
+        return override
+    env_val = os.environ.get(SHOW_TABS_ENV, "").strip().lower()
+    if env_val in ("0", "false", "no", "off"):
+        return False
+    if env_val in ("1", "true", "yes", "on"):
+        return True
+    return settings.show_tabs
 
 
 def interactive(
@@ -350,23 +385,27 @@ def interactive(
     show_all: bool,
     settings: Settings,
     backend_override: str | None = None,
+    show_tabs_override: bool | None = None,
 ) -> int:
     backend = resolve_backend(settings.backend, backend_override)
+    show_tabs = _resolve_show_tabs(settings, show_tabs_override)
     names = load_names()
     herdr = Herdr()
     directory = state_dir()
     directory.mkdir(parents=True, exist_ok=True)
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    with ThreadPoolExecutor(max_workers=6) as pool:
         if backend == "textual":
             # Warm the Textual import while the herdr and history I/O run.
             pool.submit(importlib.import_module, f"{__package__}.tui")
         socket_future = pool.submit(socket_path, herdr)
         workspaces_future = pool.submit(herdr.workspaces)
         panes_future = pool.submit(herdr.panes)
+        tabs_future = pool.submit(_safe_tabs, herdr)
         history_future = pool.submit(read_history, source=settings.history)
         socket = socket_future.result()
         workspaces = workspaces_future.result()
         panes = panes_future.result()
+        raw_tabs = tabs_future.result()
         history = history_future.result()
     path = state_file(socket)
     instance = socket_instance(socket)
@@ -378,6 +417,7 @@ def interactive(
     opened = open_paths(workspaces, panes, mapping, names)
     current = current_project(pane_id, panes, workspaces, mapping, names)
     agents = agents_by_path(workspaces, panes, mapping, names)
+    tabs = tabs_by_path(workspaces, raw_tabs, panes, mapping, names)
     paths_git = rank_paths(history, current, opened, False)
     paths_all = rank_paths(history, current, opened, True)
     mapping_reader = lambda: read_live_mapping(path, instance)  # noqa: E731
@@ -396,6 +436,8 @@ def interactive(
             herdr=herdr,
             mapping_reader=mapping_reader,
             agents=agents,
+            tabs=tabs,
+            show_tabs=show_tabs,
         )
     elif backend == "skim":
         result = run_skim(
@@ -412,6 +454,8 @@ def interactive(
             history=history,
             close_callback=lambda target: close(target, names, herdr),
             agents=agents,
+            tabs=tabs,
+            show_tabs=show_tabs,
         )
     elif backend == "gum":
         result = run_gum(
@@ -426,6 +470,8 @@ def interactive(
             herdr=herdr,
             mapping_reader=mapping_reader,
             agents=agents,
+            tabs=tabs,
+            show_tabs=show_tabs,
         )
     else:
         from .tui import PickerApp
@@ -448,6 +494,8 @@ def interactive(
             workspaces=workspaces,
             panes=panes,
             agents=agents,
+            tabs=tabs,
+            show_tabs=show_tabs,
         )
         result = app.run()
     ignore_hangup()
@@ -469,13 +517,19 @@ def _refresh_row_files(
         return
     open_env = os.environ.get(OPEN_ROWS_ENV)
     open_file = Path(open_env) if open_env and Path(open_env).parent.is_dir() else None
-    workspaces, panes = _fetch_herdr_state(herdr)
+    workspaces, panes, raw_tabs = _fetch_herdr_state(herdr)
     mapping = read_live_mapping(path, instance)
     pane_id = active_pane_id()
     opened = open_paths(workspaces, panes, mapping, names)
     current = current_project(pane_id, panes, workspaces, mapping, names)
     agents = agents_by_path(workspaces, panes, mapping, names)
-    history = read_history(source=load_settings().history)
+    settings = load_settings()
+    tabs = (
+        tabs_by_path(workspaces, raw_tabs, panes, mapping, names)
+        if _resolve_show_tabs(settings, None)
+        else None
+    )
+    history = read_history(source=settings.history)
     write_row_files(
         git_file,
         all_file,
@@ -486,6 +540,7 @@ def _refresh_row_files(
         names,
         open_file=open_file,
         agents=agents,
+        tabs=tabs,
     )
 
 
@@ -533,12 +588,15 @@ def close(path_argument: str, names: dict[str, str], herdr: Herdr) -> int:
     return 0
 
 
-def parse(argv: list[str]) -> tuple[str | None, bool, bool, str | None, str | None]:
+def parse(
+    argv: list[str],
+) -> tuple[str | None, bool, bool, str | None, str | None, bool | None]:
     move_mode: str | None = None
     show_all = False
     open_picker_mode = False
     close_path: str | None = None
     backend_override: str | None = None
+    show_tabs_override: bool | None = None
     remaining = list(argv)
     while remaining:
         argument = remaining.pop(0)
@@ -548,6 +606,10 @@ def parse(argv: list[str]) -> tuple[str | None, bool, bool, str | None, str | No
             move_mode = "tab"
         elif argument == "--all":
             show_all = True
+        elif argument == "--tabs":
+            show_tabs_override = True
+        elif argument == "--no-tabs":
+            show_tabs_override = False
         elif argument == "open-picker":
             open_picker_mode = True
         elif argument == "--close":
@@ -563,13 +625,22 @@ def parse(argv: list[str]) -> tuple[str | None, bool, bool, str | None, str | No
             backend_override = value
         else:
             raise Failure(USAGE)
-    return move_mode, show_all, open_picker_mode, close_path, backend_override
+    return (
+        move_mode,
+        show_all,
+        open_picker_mode,
+        close_path,
+        backend_override,
+        show_tabs_override,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     try:
-        move_mode, show_all, picker, close_path, backend_override = parse(arguments)
+        move_mode, show_all, picker, close_path, backend_override, show_tabs_override = parse(
+            arguments
+        )
         # Fail fast on a broken config.toml or invalid --backend, whatever the entry point.
         settings = load_settings()
         if backend_override is not None:
@@ -581,10 +652,12 @@ def main(argv: list[str] | None = None) -> int:
                     f"Unknown backend {backend_override!r}; expected one of {allowed}"
                 )
         if picker:
-            return open_picker(move_mode, show_all, backend_override)
+            return open_picker(move_mode, show_all, backend_override, show_tabs_override)
         if close_path is not None:
             return close(close_path, load_names(), Herdr())
-        return interactive(move_mode, show_all, settings, backend_override)
+        return interactive(
+            move_mode, show_all, settings, backend_override, show_tabs_override
+        )
     except Failure as error:
         if str(error) == USAGE:
             try:

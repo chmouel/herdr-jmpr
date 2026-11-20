@@ -17,12 +17,17 @@ from .config import normalize_path, workspace_label
 from .frecency import (
     CURRENT_MARK,
     OPEN_MARK,
+    TREE_BRANCH,
+    TREE_LAST,
+    TabEntry,
     agents_by_path,
     current_project,
     display_path,
     format_agent_badges,
+    format_tab_agent_badge,
     open_paths,
     rank_paths,
+    tabs_by_path,
     workspace_worktree_path,
 )
 from .herdr import Herdr, HerdrError
@@ -88,6 +93,8 @@ class Result:
     src_tab: str = ""
     src_layout: dict | None = None
     tab_label: str | None = None
+    target_tab_id: str = ""
+    target_workspace_id: str = ""
 
 
 def resolve_backend(configured: str = "textual", override: str | None = None) -> str:
@@ -148,6 +155,30 @@ def format_ansi_row(
     return f"{line}\t{path}" if include_target else line
 
 
+def format_ansi_tab_row(
+    path: str,
+    tab: TabEntry,
+    *,
+    is_last: bool,
+    include_target: bool = True,
+) -> str:
+    connector = TREE_LAST if is_last else TREE_BRANCH
+    if tab.focused:
+        mark = f"\033[33m{CURRENT_MARK}\033[0m "
+    elif tab.active:
+        mark = f"\033[34m{OPEN_MARK}\033[0m "
+    else:
+        mark = "  "
+    shown = tab.label
+    if tab.agents:
+        badge = format_tab_agent_badge(tab.agents, tab.agent_status)
+        shown += f"  \033[33m{badge}\033[0m"
+    line = f"  \033[2m{connector}\033[0m{mark}{shown}"
+    if include_target:
+        return f"{line}\t{path}\t{tab.workspace_id}\t{tab.tab_id}"
+    return line
+
+
 def format_ansi_rows(
     paths: list[str],
     current: str | None,
@@ -156,12 +187,15 @@ def format_ansi_rows(
     *,
     include_target: bool = True,
     agents: dict[str, tuple[str, ...]] | None = None,
+    tabs: dict[str, tuple[TabEntry, ...]] | None = None,
 ) -> str:
     if not paths:
         return ""
     agent_map = agents or {}
-    return (
-        "\n".join(
+    tab_map = tabs or {}
+    lines: list[str] = []
+    for path in paths:
+        lines.append(
             format_ansi_row(
                 path,
                 current,
@@ -170,10 +204,18 @@ def format_ansi_rows(
                 include_target=include_target,
                 agents=agent_map.get(path, ()),
             )
-            for path in paths
         )
-        + "\n"
-    )
+        tab_entries = tab_map.get(path) or ()
+        for index, tab in enumerate(tab_entries):
+            lines.append(
+                format_ansi_tab_row(
+                    path,
+                    tab,
+                    is_last=(index == len(tab_entries) - 1),
+                    include_target=include_target,
+                )
+            )
+    return "\n".join(lines) + "\n"
 
 
 def _open_only_paths(
@@ -199,12 +241,13 @@ def write_row_files(
     *,
     open_file: Path | None = None,
     agents: dict[str, tuple[str, ...]] | None = None,
+    tabs: dict[str, tuple[TabEntry, ...]] | None = None,
 ) -> None:
     git_file.write_text(
-        format_ansi_rows(paths_git, current, opened, names, agents=agents)
+        format_ansi_rows(paths_git, current, opened, names, agents=agents, tabs=tabs)
     )
     all_file.write_text(
-        format_ansi_rows(paths_all, current, opened, names, agents=agents)
+        format_ansi_rows(paths_all, current, opened, names, agents=agents, tabs=tabs)
     )
     if open_file is not None:
         open_file.write_text(
@@ -214,8 +257,21 @@ def write_row_files(
                 opened,
                 names,
                 agents=agents,
+                tabs=tabs,
             )
         )
+
+
+def split_picked_target(raw_target: str) -> tuple[str, str, str]:
+    """Split a tab-delimited picker target into ``(path, workspace_id, tab_id)``."""
+
+    if not raw_target:
+        return "", "", ""
+    parts = raw_target.split("\t")
+    path = parts[0]
+    workspace_id = parts[1] if len(parts) >= 2 else ""
+    tab_id = parts[2] if len(parts) >= 3 else ""
+    return path, workspace_id, tab_id
 
 
 def resolve_typed_or_picked(query: str, picked_path: str) -> str | None:
@@ -295,8 +351,18 @@ def build_result(
     src_pane: str,
     herdr: Herdr,
     choice: tuple[str, str | None] | None,
+    *,
+    target_tab_id: str = "",
+    target_workspace_id: str = "",
 ) -> Result:
-    result = Result(kind="jump", path=target, choice=choice, src_pane=src_pane)
+    result = Result(
+        kind="jump",
+        path=target,
+        choice=choice,
+        src_pane=src_pane,
+        target_tab_id="" if move_mode else target_tab_id,
+        target_workspace_id="" if move_mode else target_workspace_id,
+    )
     if not move_mode:
         return result
     if not src_pane:
@@ -375,17 +441,29 @@ def _finalize_cli_selection(
     herdr: Herdr,
     mapping_reader: Callable[[], dict[str, str]],
     names: dict[str, str],
+    *,
+    target_tab_id: str = "",
+    target_workspace_id: str = "",
 ) -> Result | None:
-    workspaces = herdr.workspaces()
-    panes = herdr.panes()
-    mapping = mapping_reader()
-    unknown = unknown_workspaces(target, workspaces, panes, mapping, names)
     choice: tuple[str, str | None] | None = None
-    if unknown:
-        choice = _choose_workspace_cli(backend, target, unknown)
-        if choice is None:
-            return None
-    return build_result(target, move_mode, src_pane, herdr, choice)
+    if move_mode or not target_workspace_id:
+        workspaces = herdr.workspaces()
+        panes = herdr.panes()
+        mapping = mapping_reader()
+        unknown = unknown_workspaces(target, workspaces, panes, mapping, names)
+        if unknown:
+            choice = _choose_workspace_cli(backend, target, unknown)
+            if choice is None:
+                return None
+    return build_result(
+        target,
+        move_mode,
+        src_pane,
+        herdr,
+        choice,
+        target_tab_id=target_tab_id,
+        target_workspace_id=target_workspace_id,
+    )
 
 
 def _self_close_command() -> str:
@@ -412,10 +490,13 @@ def run_fzf(
     herdr: Herdr,
     mapping_reader: Callable[[], dict[str, str]],
     agents: dict[str, tuple[str, ...]] | None = None,
+    tabs: dict[str, tuple[TabEntry, ...]] | None = None,
+    show_tabs: bool = True,
 ) -> Result | None:
     """Run the fzf picker."""
 
     binary_path = shutil.which("fzf") or "fzf"
+    visible_tabs = tabs if (show_tabs and not move_mode) else None
     with tempfile.TemporaryDirectory(prefix="herdr-zshz-") as temp_dir:
         git_file = Path(temp_dir) / "git.rows"
         all_file = Path(temp_dir) / "all.rows"
@@ -430,6 +511,7 @@ def run_fzf(
             names,
             open_file=open_file,
             agents=agents,
+            tabs=visible_tabs,
         )
         rows_file = all_file if show_all else git_file
         prompt = "all> " if show_all else "git> "
@@ -506,17 +588,29 @@ def run_fzf(
     # 1 means nothing matched the query, which may still be a typed directory path.
     if completed.returncode not in (0, 1):
         return None
-    query, key, picked_path = parse_query_expect_output(completed.stdout)
+    query, key, raw_picked = parse_query_expect_output(completed.stdout)
+    picked_path, target_ws_id, target_tab_id = split_picked_target(raw_picked)
     selection = resolve_typed_or_picked(query, picked_path)
     if not selection:
         return None
+    if selection != picked_path:
+        target_ws_id = ""
+        target_tab_id = ""
     effective_move = move_mode
     if key == "alt-p":
         effective_move = "pane"
     elif key == "alt-t":
         effective_move = "tab"
     return _finalize_cli_selection(
-        "fzf", selection, effective_move, src_pane, herdr, mapping_reader, names
+        "fzf",
+        selection,
+        effective_move,
+        src_pane,
+        herdr,
+        mapping_reader,
+        names,
+        target_tab_id=target_tab_id,
+        target_workspace_id=target_ws_id,
     )
 
 
@@ -535,6 +629,8 @@ def run_skim(
     history: list[str],
     close_callback: Callable[[str], int],
     agents: dict[str, tuple[str, ...]] | None = None,
+    tabs: dict[str, tuple[TabEntry, ...]] | None = None,
+    show_tabs: bool = True,
 ) -> Result | None:
     """Run the skim (``sk``) picker with Python-driven toggle and close actions."""
 
@@ -544,6 +640,7 @@ def run_skim(
     cur_project = current
     cur_opened = set(opened)
     cur_agents = dict(agents) if agents else {}
+    cur_tabs = dict(tabs) if tabs else {}
     git_list = list(paths_git)
     all_list = list(paths_all)
     initial_query = ""
@@ -555,8 +652,9 @@ def run_skim(
             active_paths = all_list
         else:
             active_paths = git_list
+        visible_tabs = cur_tabs if (show_tabs and not move_mode) else None
         rows = format_ansi_rows(
-            active_paths, cur_project, cur_opened, names, agents=cur_agents
+            active_paths, cur_project, cur_opened, names, agents=cur_agents, tabs=visible_tabs
         )
         prompt = f"{scope}> "
         args = [
@@ -596,7 +694,8 @@ def run_skim(
         )
         if completed.returncode not in (0, 1):
             return None
-        query, key, picked_path = parse_query_expect_output(completed.stdout)
+        query, key, raw_picked = parse_query_expect_output(completed.stdout)
+        picked_path, target_ws_id, target_tab_id = split_picked_target(raw_picked)
         if key == "alt-a":
             scope = "git" if scope == "all" else "all"
             previous_scope = scope
@@ -615,10 +714,15 @@ def run_skim(
                 close_callback(picked_path)
                 workspaces = herdr.workspaces()
                 panes = herdr.panes()
+                try:
+                    raw_tabs = herdr.tabs()
+                except HerdrError:
+                    raw_tabs = []
                 mapping = mapping_reader()
                 cur_opened = open_paths(workspaces, panes, mapping, names)
                 cur_project = current_project(src_pane, panes, workspaces, mapping, names)
                 cur_agents = agents_by_path(workspaces, panes, mapping, names)
+                cur_tabs = tabs_by_path(workspaces, raw_tabs, panes, mapping, names)
                 git_list = rank_paths(history, cur_project, cur_opened, False)
                 all_list = rank_paths(history, cur_project, cur_opened, True)
             initial_query = query
@@ -627,13 +731,24 @@ def run_skim(
         selection = resolve_typed_or_picked(query, picked_path)
         if not selection:
             return None
+        if selection != picked_path:
+            target_ws_id = ""
+            target_tab_id = ""
         effective_move = move_mode
         if key == "alt-p":
             effective_move = "pane"
         elif key == "alt-t":
             effective_move = "tab"
         return _finalize_cli_selection(
-            "skim", selection, effective_move, src_pane, herdr, mapping_reader, names
+            "skim",
+            selection,
+            effective_move,
+            src_pane,
+            herdr,
+            mapping_reader,
+            names,
+            target_tab_id=target_tab_id,
+            target_workspace_id=target_ws_id,
         )
 
 
@@ -650,14 +765,17 @@ def run_gum(
     herdr: Herdr,
     mapping_reader: Callable[[], dict[str, str]],
     agents: dict[str, tuple[str, ...]] | None = None,
+    tabs: dict[str, tuple[TabEntry, ...]] | None = None,
+    show_tabs: bool = True,
 ) -> Result | None:
     """Run ``gum filter`` with ANSI labels and typed-directory support."""
 
     binary_path = shutil.which("gum") or "gum"
     paths = paths_all if show_all else paths_git
     agent_map = agents or {}
-    by_raw: dict[str, str] = {}
-    by_plain: dict[str, str] = {}
+    tab_map = (tabs or {}) if (show_tabs and not move_mode) else {}
+    by_raw: dict[str, tuple[str, str, str]] = {}
+    by_plain: dict[str, tuple[str, str, str]] = {}
     lines: list[str] = []
     for path in paths:
         line = format_ansi_row(
@@ -669,8 +787,19 @@ def run_gum(
             agents=agent_map.get(path, ()),
         )
         lines.append(line)
-        by_raw[line] = path
-        by_plain[ANSI_RE.sub("", line)] = path
+        by_raw[line] = (path, "", "")
+        by_plain[ANSI_RE.sub("", line)] = (path, "", "")
+        tab_entries = tab_map.get(path) or ()
+        for index, tab in enumerate(tab_entries):
+            tab_line = format_ansi_tab_row(
+                path,
+                tab,
+                is_last=(index == len(tab_entries) - 1),
+                include_target=False,
+            )
+            lines.append(tab_line)
+            by_raw[tab_line] = (path, tab.workspace_id, tab.tab_id)
+            by_plain[ANSI_RE.sub("", tab_line)] = (path, tab.workspace_id, tab.tab_id)
 
     prompt = "all> " if show_all else "git> "
     args = [
@@ -701,11 +830,23 @@ def run_gum(
     picked = completed.stdout.rstrip("\r\n")
     if not picked:
         return None
-    selection = by_raw.get(picked) or by_plain.get(ANSI_RE.sub("", picked))
-    if not selection:
+    matched = by_raw.get(picked) or by_plain.get(ANSI_RE.sub("", picked))
+    if matched is not None:
+        selection, target_ws_id, target_tab_id = matched
+    else:
         selection = resolve_typed_or_picked(picked, "")
+        target_ws_id = ""
+        target_tab_id = ""
     if not selection:
         return None
     return _finalize_cli_selection(
-        "gum", selection, move_mode, src_pane, herdr, mapping_reader, names
+        "gum",
+        selection,
+        move_mode,
+        src_pane,
+        herdr,
+        mapping_reader,
+        names,
+        target_tab_id=target_tab_id,
+        target_workspace_id=target_ws_id,
     )

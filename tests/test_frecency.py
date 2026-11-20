@@ -188,6 +188,34 @@ class FrecencyTest(unittest.TestCase):
             f"{agent_icon('copilot')} 2*{agent_icon('pi')}",
         )
 
+    def test_worktree_workspace_with_custom_label_appears_even_outside_history(self):
+        wt = self.root / "worktrees" / "issue-515-feature"
+        wt.mkdir(parents=True)
+        (wt / ".git").write_text("gitdir: /tmp/repo/.git/worktrees/issue-515\n")
+        workspaces = [
+            {
+                "workspace_id": "w9A",
+                "label": "#515 [Feature]: Allow local edits",
+                "active_tab_id": "w9A:t1",
+                "worktree": {"checkout_path": str(wt), "is_linked_worktree": True},
+            }
+        ]
+        panes = [
+            {
+                "workspace_id": "w9A",
+                "pane_id": "w9A:p1",
+                "tab_id": "w9A:t1",
+                "cwd": str(wt),
+                "agent": "pi",
+            }
+        ]
+        opened = open_paths(workspaces, panes, {}, {})
+        self.assertEqual(opened, {str(wt)})
+        self.assertEqual(agents_by_path(workspaces, panes, {}, {}), {str(wt): ("pi",)})
+        self.assertIsNone(current_project("w9A:p1", panes, workspaces, {}, {}))
+        self.assertEqual(rank_paths([], None, opened, show_all=False), [str(wt)])
+        self.assertEqual(rank_paths([], None, opened, show_all=True), [str(wt)])
+
 
 if __name__ == "__main__":
     unittest.main()

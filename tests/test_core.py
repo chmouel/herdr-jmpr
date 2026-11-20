@@ -297,6 +297,8 @@ class PtyHangupTest(unittest.TestCase):
                     text=False,
                 )
                 time.sleep(0.8)
+                os.write(master, b"dst")
+                time.sleep(0.2)
                 os.write(master, b"\r")
                 # The picker writes a full screen per refresh; with no reader
                 # the pty buffer fills and the child blocks before it can

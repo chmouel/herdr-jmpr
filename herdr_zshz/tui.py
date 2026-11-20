@@ -19,7 +19,7 @@ from textual.screen import ModalScreen
 from textual.theme import Theme
 from textual.widgets import Static
 
-from .config import workspace_label
+from .config import normalize_path, workspace_label
 from .frecency import (
     CURRENT_MARK,
     OPEN_MARK,
@@ -30,6 +30,7 @@ from .frecency import (
     format_agent_badges,
     open_paths,
     rank_paths,
+    workspace_worktree_path,
 )
 from .herdr import Herdr, HerdrError
 from .picker import (
@@ -1657,16 +1658,20 @@ class PickerApp(App[Result | None]):
                 workspaces, panes = [], []
         mapping = self.safe_mapping()
         label = workspace_label(path, self.names)
+        normalized_path = normalize_path(path)
         open_ids = [
             str(workspace.get("workspace_id"))
             for workspace in workspaces
-            if workspace.get("label") == label
-            and (
-                mapping.get(workspace.get("workspace_id")) == path
-                or any(
-                    pane.get("workspace_id") == workspace.get("workspace_id")
-                    and pane.get("cwd") == path
-                    for pane in panes
+            if workspace_worktree_path(workspace) == normalized_path
+            or (
+                workspace.get("label") == label
+                and (
+                    mapping.get(workspace.get("workspace_id")) == path
+                    or any(
+                        pane.get("workspace_id") == workspace.get("workspace_id")
+                        and pane.get("cwd") == path
+                        for pane in panes
+                    )
                 )
             )
         ]

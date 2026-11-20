@@ -144,6 +144,18 @@ def git_root(path: str) -> str | None:
     return None
 
 
+def workspace_worktree_path(workspace: dict) -> str | None:
+    """Return the normalized checkout path for a Herdr worktree workspace."""
+
+    worktree = workspace.get("worktree")
+    if not isinstance(worktree, dict):
+        return None
+    checkout = worktree.get("checkout_path")
+    if isinstance(checkout, str) and checkout:
+        return normalize_path(checkout)
+    return None
+
+
 def open_paths(
     workspaces: list[dict],
     panes: list[dict],
@@ -152,10 +164,16 @@ def open_paths(
 ) -> set[str]:
     live = {w.get("workspace_id"): w.get("label") for w in workspaces}
     opened: set[str] = set()
-    for workspace_id, label in live.items():
+    for workspace in workspaces:
+        workspace_id = workspace.get("workspace_id")
+        label = workspace.get("label")
         mapped = saved_mapping.get(workspace_id)
         if mapped and workspace_label(mapped, names) == label:
             opened.add(mapped)
+            continue
+        checkout = workspace_worktree_path(workspace)
+        if checkout:
+            opened.add(checkout)
     for pane in panes:
         cwd = pane.get("cwd")
         if not cwd or saved_mapping.get(pane.get("workspace_id")):
@@ -178,9 +196,11 @@ def current_project(
     if pane is None:
         return None
     cur_ws = pane.get("workspace_id")
-    cur_label = next(
-        (w.get("label") for w in workspaces if w.get("workspace_id") == cur_ws), ""
+    cur_workspace = next(
+        (w for w in workspaces if w.get("workspace_id") == cur_ws), None
     )
+    cur_label = cur_workspace.get("label", "") if cur_workspace else ""
+    cur_worktree = workspace_worktree_path(cur_workspace) if cur_workspace else None
     cur_cwd = pane["cwd"]
     if not os.path.isdir(cur_cwd):
         return None
@@ -193,8 +213,10 @@ def current_project(
     cur_mapped = saved_mapping.get(cur_ws)
     directory = cur_cwd
     while current:
-        if cur_mapped == directory or (
-            not cur_mapped and cur_label == workspace_label(directory, names)
+        if (
+            cur_mapped == directory
+            or cur_worktree == normalize_path(directory)
+            or (not cur_mapped and cur_label == workspace_label(directory, names))
         ):
             return None
         if directory in (current, "/"):
@@ -211,7 +233,6 @@ def agents_by_path(
 ) -> dict[str, tuple[str, ...]]:
     """Map open workspace paths to sorted active agent names (preserving counts)."""
 
-    live = {w.get("workspace_id"): w.get("label") for w in workspaces}
     ws_agents: dict[str, list[str]] = {}
     ws_cwds: dict[str, set[str]] = {}
     for pane in panes:
@@ -226,13 +247,19 @@ def agents_by_path(
             ws_agents.setdefault(str(ws_id), []).append(str(agent))
 
     by_path: dict[str, list[str]] = {}
-    for ws_id, label in live.items():
+    for workspace in workspaces:
+        ws_id = workspace.get("workspace_id")
+        label = workspace.get("label")
         if not ws_id or str(ws_id) not in ws_agents:
             continue
         agents = ws_agents[str(ws_id)]
         mapped = saved_mapping.get(ws_id)
         if mapped and workspace_label(mapped, names) == label:
             by_path.setdefault(mapped, []).extend(agents)
+            continue
+        checkout = workspace_worktree_path(workspace)
+        if checkout:
+            by_path.setdefault(checkout, []).extend(agents)
             continue
         for cwd in ws_cwds.get(str(ws_id), ()):
             if workspace_label(cwd, names) == label:
@@ -270,17 +297,21 @@ def rank_paths(
     """Order paths: current project first, open workspaces next, then frecency."""
 
     all_paths: list[str] = []
+    in_all: set[str] = set()
     git_paths: list[str] = []
     in_git: set[str] = set()
     root_cache: dict[str, str | None] = {}
     if current:
         all_paths.append(current)
+        in_all.add(current)
         git_paths.append(current)
         in_git.add(current)
     for directory in history:
         if not os.path.isdir(directory) or directory == current:
             continue
-        all_paths.append(directory)
+        if directory not in in_all:
+            in_all.add(directory)
+            all_paths.append(directory)
         if directory in opened:
             root = directory
         else:
@@ -291,6 +322,15 @@ def rank_paths(
             continue
         in_git.add(root)
         git_paths.append(root)
+    for directory in sorted(opened):
+        if not os.path.isdir(directory) or directory == current:
+            continue
+        if directory not in in_all:
+            in_all.add(directory)
+            all_paths.append(directory)
+        if directory not in in_git:
+            in_git.add(directory)
+            git_paths.append(directory)
     paths = all_paths if show_all else git_paths
     top = [path for path in paths if path == current]
     rest = [path for path in paths if path != current]

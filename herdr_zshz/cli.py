@@ -12,8 +12,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .config import NamesError, load_names, workspace_label
-from .frecency import agents_by_path, current_project, open_paths, rank_paths, read_history
+from .config import NamesError, load_names, normalize_path, workspace_label
+from .frecency import (
+    agents_by_path,
+    current_project,
+    open_paths,
+    rank_paths,
+    read_history,
+    workspace_worktree_path,
+)
 from .herdr import Herdr, HerdrError, layout_ops
 from .picker import (
     ALL_ROWS_ENV,
@@ -230,6 +237,18 @@ def resolve_and_move(
     )
     if mapped is not None:
         return str(mapped["workspace_id"]), ""
+
+    normalized_target = normalize_path(target)
+    worktree_match = next(
+        (
+            workspace
+            for workspace in workspaces
+            if workspace_worktree_path(workspace) == normalized_target
+        ),
+        None,
+    )
+    if worktree_match is not None:
+        return str(worktree_match["workspace_id"]), ""
 
     for workspace in workspaces:
         workspace_id = workspace.get("workspace_id")

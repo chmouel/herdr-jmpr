@@ -8,7 +8,8 @@ import os
 import tempfile
 from pathlib import Path
 
-from .config import workspace_label
+from .config import normalize_path, workspace_label
+from .frecency import workspace_worktree_path
 
 
 class StateError(Exception):
@@ -148,9 +149,13 @@ def snapshot_close_targets(
     names: dict[str, str],
 ) -> tuple[list[str], set[tuple[str, str, str]], list[str]]:
     label = workspace_label(path, names)
+    normalized_path = normalize_path(path)
     close_ids: list[str] = []
     for workspace in workspaces:
         workspace_id = workspace.get("workspace_id")
+        if workspace_worktree_path(workspace) == normalized_path:
+            close_ids.append(workspace_id)
+            continue
         if workspace.get("label") != label:
             continue
         if workspace_id in saved_mapping:

@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import workspace_label
+from .config import normalize_path, workspace_label
 from .frecency import (
     CURRENT_MARK,
     OPEN_MARK,
@@ -23,6 +23,7 @@ from .frecency import (
     format_agent_badges,
     open_paths,
     rank_paths,
+    workspace_worktree_path,
 )
 from .herdr import Herdr, HerdrError
 from .settings import BACKENDS
@@ -250,6 +251,9 @@ def unknown_workspaces(
     mapping: dict[str, str],
     names: dict[str, str],
 ) -> list[str]:
+    normalized_target = normalize_path(target)
+    if any(workspace_worktree_path(workspace) == normalized_target for workspace in workspaces):
+        return []
     label = workspace_label(target, names)
     live = [workspace for workspace in workspaces if workspace.get("label") == label]
     if any(mapping.get(workspace.get("workspace_id")) == target for workspace in live):

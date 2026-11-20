@@ -244,6 +244,22 @@ class CloseTargetsTest(unittest.TestCase):
         self.assertEqual(len(agents), 2)
         self.assertEqual(names, ["copilot", "zed"])
 
+    def test_worktree_workspace_is_matched_regardless_of_label(self):
+        workspaces = [
+            {
+                "workspace_id": "w9A",
+                "label": "#515 [Feature]: Allow local edits",
+                "worktree": {"checkout_path": "/work/wt/issue-515"},
+            }
+        ]
+        panes = [{"workspace_id": "w9A", "pane_id": "p1", "agent": "pi"}]
+        close_ids, agents, names = snapshot_close_targets(
+            "/work/wt/issue-515", workspaces, panes, {}, {}
+        )
+        self.assertEqual(close_ids, ["w9A"])
+        self.assertEqual(agents, {("w9A", "p1", "pi")})
+        self.assertEqual(names, ["pi"])
+
 
 if __name__ == "__main__":
     unittest.main()

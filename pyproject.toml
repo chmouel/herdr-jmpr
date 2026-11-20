@@ -6,6 +6,10 @@ readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 authors = [{ name = "Chmouel Boudjnah" }]
+dependencies = [
+    "textual>=0.85.0",
+    "tomli>=2.0; python_version < '3.11'",
+]
 keywords = ["herdr", "zsh-z", "zoxide", "workspace", "tui", "textual", "frecency"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -23,10 +27,6 @@ classifiers = [
 Homepage = "https://github.com/chmouel/herdr-jmpr"
 Repository = "https://github.com/chmouel/herdr-jmpr"
 Issues = "https://github.com/chmouel/herdr-jmpr/issues"
-dependencies = [
-    "textual>=0.85.0",
-    "tomli>=2.0; python_version < '3.11'",
-]
 
 [tool.ruff]
 target-version = "py310"

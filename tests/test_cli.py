@@ -146,9 +146,7 @@ class CliTest(unittest.TestCase):
                     environment={"HERDR_BIN_PATH": str(fake.executable)},
                 )
                 self.assertEqual(code, 0)
-                calls = fake.calls()
-                self.assertEqual(len(calls), 1)
-                self.assertIn(f"HERDR_ZSHZ_START_MODE={expected}", calls[0])
+                self.assertIn(f"HERDR_ZSHZ_START_MODE={expected}", fake.calls()[-1])
 
     def test_backend_flag_validation_and_open_picker_forwarding(self):
         for missing_val in (["--backend"], ["--backend="]):

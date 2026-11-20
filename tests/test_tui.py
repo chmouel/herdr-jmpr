@@ -10,6 +10,7 @@ from textual.app import App
 from textual.containers import VerticalScroll
 
 from herdr_zshz.frecency import rank_paths
+from herdr_zshz.settings import SettingsError
 from herdr_zshz.state import StateError
 from herdr_zshz.tui import (
     MAX_CLOSE_ROUNDS,
@@ -262,15 +263,13 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
             lines = text.split("\n")
             self.assertTrue(str(lines[1]).startswith("\u258c"))
             self.assertFalse(str(lines[0]).startswith("\u258c"))
-            # Reverse video alone can be invisible, so the row carries an
-            # explicit background taken from the theme's primary colour.
             style = app.row_list.selected_row_style
             self.assertNotEqual(style, "bold reverse")
-            self.assertIn(" on ", style)
+            self.assertTrue(style.startswith("on #"), style)
             highlighted = [
                 span
                 for span in text.spans
-                if span.start == len(lines[0]) + 1 and " on " in str(span.style)
+                if span.start == len(lines[0]) + 1 and str(span.style).startswith("on #")
             ]
             self.assertTrue(highlighted, [str(span.style) for span in text.spans])
 
@@ -310,17 +309,18 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(70, 16)) as pilot:
             await pilot.pause()
             await pilot.press("down")
+            col_width = app.query_one("#list-scroll").content_size.width
             text = app.row_list.render()
             lines = str(text).split("\n")
-            self.assertEqual(len(lines[0]), 70)
-            self.assertEqual(len(lines[1]), 70)
+            self.assertEqual(len(lines[0]), col_width)
+            self.assertEqual(len(lines[1]), col_width)
             start = len(lines[0]) + 1
             padded = [
                 span
                 for span in text.spans
                 if span.start <= start
-                and span.end >= start + 70
-                and " on " in str(span.style)
+                and span.end >= start + col_width
+                and str(span.style).startswith("on ")
             ]
             self.assertTrue(padded, [(s.start, s.end, str(s.style)) for s in text.spans])
 
@@ -1031,29 +1031,29 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
         app = self.app(move_mode="pane")
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            title = self.text(app, "#title")
-            self.assertTrue(title.startswith(" MOVE PANE "), title)
-            self.assertTrue(title.endswith("[git roots]"), title)
+            bar = self.text(app, "#query")
+            self.assertTrue(bar.startswith(" move pane "), bar)
+            self.assertTrue(bar.endswith("[git]"), bar)
             badge = [
                 span
-                for span in app.query_one("#title").render().spans
-                if getattr(span.style, "reverse", False)
+                for span in app.query_one("#query").render().spans
+                if span.start == 0 and (" on " in str(span.style) or "reverse" in str(span.style))
             ]
-            self.assertTrue(badge, "the move badge must be a reverse-video keycap")
+            self.assertTrue(badge, "the move chip must carry a filled background")
             await pilot.press("alt+a")
-            self.assertTrue(self.text(app, "#title").endswith("[all dirs]"))
+            self.assertTrue(self.text(app, "#query").endswith("[all]"))
 
     async def test_prompt_bar_pins_the_match_count_to_the_right_edge(self):
         app = self.app()
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             bar = self.text(app, "#query")
-            self.assertTrue(bar.endswith("2/2"), repr(bar))
+            self.assertTrue(bar.endswith("2/2  [git]"), repr(bar))
             self.assertEqual(len(bar), app.query_one("#query").content_size.width)
             app.insert_text("repo")
             await pilot.pause()
             bar = self.text(app, "#query")
-            self.assertTrue(bar.endswith("1/2"), repr(bar))
+            self.assertTrue(bar.endswith("1/2  [git]"), repr(bar))
 
         app = self.app()
         async with app.run_test(size=(100, 30)) as pilot:
@@ -1061,7 +1061,7 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             await pilot.resize_terminal(90, 30)
             await pilot.pause()
             bar = self.text(app, "#query")
-            self.assertTrue(bar.endswith("2/2"), repr(bar))
+            self.assertTrue(bar.endswith("2/2  [git]"), repr(bar))
             self.assertEqual(len(bar), app.query_one("#query").content_size.width)
 
     async def test_preview_renders_sections_with_a_key_column(self):
@@ -1079,15 +1079,13 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             app.update_preview()
             preview = self.text(app, "#preview")
             for needle in (
-                "WORKSPACE",
-                "label    repo",
-                "open (w1)",
-                "tabs     t1, t2",
-                "agents   copilot",
-                "GIT",
-                "branch   main (dirty) \u21911",
-                "commit   feat: add vim normal mode",
-                "\u2500",
+                "repo",
+                self.repo,
+                "Current workspace (w1)",
+                "tabs    t1, t2",
+                "agents  \u26a1 copilot",
+                "\u2387 main  dirty  \u21911",
+                "feat: add vim normal mode",
                 "\u2026",
             ):
                 self.assertIn(needle, preview)
@@ -1095,9 +1093,8 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             app.preview_lines = [self.repo, "label: repo"]
             app.update_preview()
             preview = self.text(app, "#preview")
-            self.assertIn("WORKSPACE", preview)
-            self.assertIn("loading\u2026", preview)
-            self.assertNotIn("GIT", preview)
+            self.assertIn("Checking workspace\u2026", preview)
+            self.assertNotIn("\u2387", preview)
 
     async def test_selected_row_has_no_foreground_but_fills_the_width(self):
         app = self.app()
@@ -1111,25 +1108,36 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             bar = [
                 span
                 for span in text.spans
-                if span.start == start and span.end == start + width and " on " in str(span.style)
+                if span.start == start
+                and span.end == start + width
+                and str(span.style).startswith("on #")
             ]
             self.assertTrue(bar, [(s.start, s.end, str(s.style)) for s in text.spans])
             inside = [
                 span
                 for span in text.spans
                 if span.start >= start and span.end <= start + width
+                and not str(span.style).startswith("on #")
             ]
+            # Tinted dark selection preserves rich per-token foreground styling.
             self.assertTrue(inside)
-            for span in inside:
-                style = str(span.style)
-                if " on " in style:
-                    continue
-                for colour in ("yellow", "cyan", "dim", "green", "red", "blue"):
-                    self.assertNotIn(
-                        colour,
-                        style,
-                        f"selected row span carries a foreground: {style}",
-                    )
+
+            # When falling back to non-hex reverse video, foreground colours are omitted.
+            with mock.patch.object(app, "selection_style", return_value="bold reverse"):
+                app.row_list.selected_row_style = app.selection_style()
+                fallback_text = app.row_list._build_text()
+                fallback_inside = [
+                    span
+                    for span in fallback_text.spans
+                    if span.start >= start
+                    and span.end <= start + width
+                    and str(span.style) != "bold reverse"
+                ]
+                for span in fallback_inside:
+                    style = str(span.style)
+                    self.assertNotIn("#", style)
+                    for colour in ("yellow", "cyan", "dim", "green", "red", "blue"):
+                        self.assertNotIn(colour, style)
 
     async def test_long_query_is_windowed_around_the_cursor(self):
         app = self.app()
@@ -1141,7 +1149,7 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             bar = self.text(app, "#query")
             self.assertIn("\u2026", bar)
             self.assertLessEqual(len(bar), app.query_one("#query").content_size.width)
-            self.assertTrue(bar.rstrip().endswith("2/2"))
+            self.assertTrue(bar.rstrip().endswith("2/2  [git]"))
             cursor = [
                 span
                 for span in app.query_one("#query").render().spans
@@ -1156,12 +1164,10 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             for width in (120, 80):
                 await pilot.resize_terminal(width, 24)
                 await pilot.pause()
-                for selector in ("#title", "#query"):
-                    widget = app.query_one(selector)
-                    rendered = widget.render()
-                    self.assertEqual(cell_len(rendered.plain), widget.content_size.width)
-                self.assertTrue(self.text(app, "#title").endswith("[git roots]"))
-                self.assertTrue(self.text(app, "#query").endswith("2/2"))
+                widget = app.query_one("#query")
+                rendered = widget.render()
+                self.assertEqual(cell_len(rendered.plain), widget.content_size.width)
+                self.assertTrue(self.text(app, "#query").endswith("2/2  [git]"))
 
     async def test_bars_track_every_single_column_resize(self):
         app = self.app()
@@ -1170,28 +1176,23 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             for width in (121, 122, 123, 124, 125, 124, 123, 122):
                 await pilot.resize_terminal(width, 24)
                 await pilot.pause()
-                for selector in ("#title", "#query"):
-                    widget = app.query_one(selector)
-                    rendered = widget.render()
-                    self.assertEqual(
-                        cell_len(rendered.plain),
-                        widget.content_size.width,
-                        f"{selector} at {width} columns",
-                    )
-                # The footer is left-aligned, so it only has to fit.
+                widget = app.query_one("#query")
+                rendered = widget.render()
+                self.assertEqual(
+                    cell_len(rendered.plain),
+                    widget.content_size.width,
+                    f"#query at {width} columns",
+                )
                 footer = app.query_one("#status")
                 self.assertLessEqual(cell_len(str(footer.render())), footer.content_size.width)
-                self.assertTrue(self.text(app, "#title").endswith("[git roots]"))
-                self.assertTrue(self.text(app, "#query").endswith("2/2"))
+                self.assertTrue(self.text(app, "#query").endswith("2/2  [git]"))
 
     async def test_layout_rules_live_in_default_css(self):
-        # The required nowrap/ellipsis and band colours must be stylesheet
-        # rules, not inline per-widget assignments.
         css = PickerApp.DEFAULT_CSS
         self.assertIn("text-wrap: nowrap", css)
         self.assertIn("text-overflow: ellipsis", css)
         self.assertIn("#preview", css)
-        self.assertIn("width: 38%", css)
+        self.assertIn("width: 40%", css)
 
         app = self.app()
         async with app.run_test(size=(100, 24)) as pilot:
@@ -1199,14 +1200,14 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             rows = app.query_one("#list")
             self.assertEqual(rows.styles.text_wrap, "nowrap")
             self.assertEqual(rows.styles.text_overflow, "ellipsis")
-            self.assertEqual(app.query_one("#preview").styles.width.value, 38.0)
+            self.assertEqual(app.query_one("#preview").styles.width.value, 40.0)
 
     async def test_wide_query_and_error_fit_the_prompt_bar_in_cells(self):
         app = self.app()
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             query = "\u754c" * 100
-            prefix_width = len(" INSERT git\u276f ")
+            prefix_width = len("git \u203a ")
             for cursor in (0, 50, len(query)):
                 app.query = query
                 app.cursor = cursor
@@ -1250,10 +1251,10 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             app.update_preview()
             preview = self.text(app, "#preview")
             for needle in (
-                "tabs     t1",
-                "agents   copilot",
-                "tabs     t2",
-                "agents   codex",
+                "tabs    t1",
+                "agents  \u26a1 copilot",
+                "tabs    t2",
+                "agents  \u26a1 codex",
             ):
                 self.assertIn(needle, preview)
 
@@ -1279,14 +1280,15 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             self.assertLess(line, region.height)
 
     async def test_design_details_use_themed_pill_and_keycaps(self):
-        app = self.app(names={self.other: "project-y"}, opened=set())
+        app = self.app(names={self.other: "project-y"}, opened=set(), theme_setting="herdr-ink")
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
+            palette = app.palette()
             text = app.row_list._build_text()
             suffix = [
                 span
                 for span in text.spans
-                if "italic" in str(span.style) and "cyan" in str(span.style)
+                if "italic" in str(span.style) and palette.secondary in str(span.style)
             ]
             self.assertTrue(suffix, [str(span.style) for span in text.spans])
             await pilot.press("escape")
@@ -1298,7 +1300,7 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
                 if span.start == 0
             ]
             self.assertTrue(pill)
-            self.assertNotIn("yellow", str(pill[0].style))
+            self.assertIn(" on ", str(pill[0].style))
 
     async def test_confirm_and_select_modals_keep_the_approved_labels(self):
         app = self.app()
@@ -1306,6 +1308,8 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             app.push_screen(ConfirmCloseModal("repo", []))
             await pilot.pause()
+            confirm_panel = app.screen.query_one("#confirm")
+            self.assertEqual(confirm_panel.border_title, " Close workspace ")
             confirm = self.text(app.screen, "#confirm")
             self.assertIn("[y/N]", confirm)
             await pilot.press("n")
@@ -1315,7 +1319,33 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             select = self.text(app.screen, "#select")
             self.assertTrue(select.startswith("Select workspace for repo"), select)
             panel = app.screen.query_one("#select")
-            self.assertEqual(panel.border_title, " Workspace Conflict ")
+            self.assertEqual(panel.border_title, " Workspace conflict ")
+
+    async def test_theme_sync_and_preview_toggle(self):
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(self.root)}, clear=False):
+            default_app = self.app(theme_setting="auto")
+            self.assertEqual(default_app.theme, "herdr-ink")
+
+            herdr_cfg = self.root / "herdr" / "config.toml"
+            herdr_cfg.parent.mkdir(parents=True, exist_ok=True)
+            herdr_cfg.write_text('[theme]\nname = "tokyonight"\n')
+            synced_app = self.app(theme_setting="auto")
+            self.assertEqual(synced_app.theme, "tokyo-night")
+
+        with self.assertRaises(SettingsError):
+            self.app(theme_setting="no-such-theme")
+
+        app = self.app(theme_setting="herdr-ink")
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            self.assertTrue(app.query_one("#preview").display)
+            await pilot.press("alt+v")
+            await pilot.pause()
+            self.assertFalse(app.query_one("#preview").display)
+            await pilot.press("escape")
+            await pilot.press("v")
+            await pilot.pause()
+            self.assertTrue(app.query_one("#preview").display)
 
 
 

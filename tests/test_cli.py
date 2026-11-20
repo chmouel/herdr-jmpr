@@ -112,7 +112,34 @@ class CliTest(unittest.TestCase):
     def test_unknown_flag_prints_usage_and_exits_2(self):
         code, stderr = self.run_cli(["--bogus"])
         self.assertEqual(code, 2)
-        self.assertEqual(stderr.strip(), "usage: herdr-zshz [--move-pane|--move-tab] [--all]")
+        self.assertEqual(
+            stderr.strip(),
+            "usage: herdr-zshz [--move-pane|--move-tab] [--all] [--backend <backend>]",
+        )
+
+    def test_backend_flag_validation_and_open_picker_forwarding(self):
+        for missing_val in (["--backend"], ["--backend="]):
+            with self.subTest(missing_val=missing_val):
+                code, stderr = self.run_cli(missing_val)
+                self.assertEqual(code, 2)
+                self.assertIn("--backend", stderr)
+
+        for unknown in (["--backend", "peco"], ["--backend=peco"]):
+            with self.subTest(unknown=unknown):
+                code, stderr = self.run_cli(unknown)
+                self.assertEqual(code, 1)
+                self.assertIn("Unknown backend 'peco'", stderr)
+
+        fake = self.fake()
+        code, _ = self.run_cli(
+            ["open-picker", "--backend", "fzf"],
+            environment={
+                "HERDR_BIN_PATH": str(fake.executable),
+                "HERDR_ACTIVE_PANE_ID": "A",
+            },
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("HERDR_ZSHZ_BACKEND=fzf", fake.calls()[0])
 
     def test_open_picker_builds_command(self):
         fake = self.fake()
@@ -199,12 +226,24 @@ class CliTest(unittest.TestCase):
         workspaces = [{"workspace_id": "w1", "label": "proj", "active_tab_id": "t"}]
         panes = [{"workspace_id": "w1", "pane_id": "p1", "tab_id": "t", "cwd": str(self.target)}]
         fake = self.fake(workspaces, panes)
+        git_rows = self.root / "git.rows"
+        all_rows = self.root / "all.rows"
+        (self.target / ".git").mkdir()
+        git_rows.write_text("stale\n")
+        all_rows.write_text("stale\n")
         code, _ = self.run_cli(
             ["--close", str(self.target)],
-            environment={"HERDR_BIN_PATH": str(fake.executable)},
+            environment={
+                "HERDR_BIN_PATH": str(fake.executable),
+                "HERDR_ZSHZ_GIT_ROWS": str(git_rows),
+                "HERDR_ZSHZ_ALL_ROWS": str(all_rows),
+            },
         )
         self.assertEqual(code, 0)
         self.assertIn(["workspace", "close", "w1"], fake.calls())
+        self.assertIn(f"\t{self.target}", git_rows.read_text())
+        self.assertNotIn("\x1b[34m●", git_rows.read_text())
+        self.assertIn(f"\t{self.target}", all_rows.read_text())
 
     def test_close_aborts_when_agent_appears_in_phase_two(self):
         workspaces = [{"workspace_id": "w1", "label": "proj", "active_tab_id": "t"}]

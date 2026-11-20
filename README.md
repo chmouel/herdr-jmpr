@@ -1,12 +1,9 @@
 # herdr-zshz
 
 A [Herdr](https://herdr.dev) plugin that jumps to project workspaces ranked by
-your `zsh-z` frecency history, in a Textual picker with fzf-style extended
-search, a vim mode and a live project preview.
-
-It is the Herdr plugin port of the `zsh-jump.sh` script: same frecency data
-file, same ranking buckets, same workspace mapping rules, same close
-reconfirmation and the same split replay when moving a tab.
+your `zsh-z` frecency history. It includes a theme-aware Textual workspace
+switcher (with fzf-style extended search, vim normal mode, and a live workspace
+preview) alongside `fzf`, `skim` (`sk`), and `gum` backends.
 
 ## Install
 
@@ -62,21 +59,45 @@ not, the plugin prints `Invalid names.tsv line <n>: <line>` and exits 1.
 Optional; without it the built-in defaults apply.
 
 ```toml
-# "insert" (default) filters as you type; "normal" starts in the vim keymap,
-# where you navigate with j/k and press i, a or / to start filtering.
-start_mode = "normal"
+# Picker backend: "textual" (default), "fzf", "skim", "gum", or "auto".
+# "auto" probes PATH in order: fzf -> sk -> gum -> textual.
+backend = "textual"
+
+# Textual theme: "auto" (default, syncs Herdr's [theme].name or falls back to
+# "herdr-ink"), or any registered Textual theme name such as "dracula",
+# "tokyo-night", "catppuccin-mocha", "rose-pine", "nord", or "gruvbox".
+theme = "auto"
+
+# Textual initial mode: "insert" (default) filters as you type; "normal" starts
+# in the vim keymap, where you navigate with j/k and press i, a, or / to filter.
+start_mode = "insert"
 ```
 
-`start_mode` accepts `insert` or `normal`. Unknown keys and invalid values make
-the plugin print `Invalid <path>: ...` and exit 1 rather than silently ignoring
-the file, so typos surface immediately. `HERDR_PLUGIN_CONFIG_DIR` overrides the
-directory, which is handy for trying a different config without moving files.
+You can also override the backend per invocation with `--backend <name>` (both
+on `herdr-zshz` and `herdr-zshz open-picker`) or via `HERDR_ZSHZ_BACKEND`.
 
-## Picker keys
+Unknown keys and invalid values make the plugin print `Invalid <path>: ...` and
+exit 1 rather than silently ignoring the file, so typos surface immediately.
+`HERDR_PLUGIN_CONFIG_DIR` overrides the directory, which is handy for trying a
+different config without moving files.
 
-The picker starts in `INSERT` mode (or `NORMAL` mode when `start_mode = "normal"`
-is set in `config.toml`) and lists git repository roots; `alt-a`
-(or the `all` action) switches to every zsh-z directory.
+## Picker backends and keys
+
+- `textual` (default) runs the built-in theme-aware workspace switcher documented
+  below.
+- `fzf` uses a reverse 16-color layout with `Enter` to jump, `alt-p` to move
+  pane, `alt-t` to move tab, `alt-a` to toggle between `git>` and `all>`,
+  `ctrl-x` to close the selected workspace and reload live markers, and `ctrl-h`
+  to toggle the bottom help drawer.
+- `skim` (`sk`) supports the same `Enter`, `alt-p`, `alt-t`, `alt-a`, `ctrl-x`,
+  and `ctrl-h` bindings.
+- `gum` runs `gum filter` with frecency order preserved and typed-path support.
+
+### Textual picker keys
+
+The Textual picker starts in insert mode (or normal mode when
+`start_mode = "normal"` is set in `config.toml`) and lists git repository
+roots; `alt+a` (or the `all` action) switches to every zsh-z directory.
 
 Insert mode:
 
@@ -106,6 +127,7 @@ Normal mode:
 | `dd` | clear the query |
 | `C` | clear the query and enter insert mode |
 | `x` | close the project workspace |
+| `v` | toggle workspace preview |
 | `p` / `t` | move pane / tab |
 | `o`, `l`, `enter` | accept the selection |
 | `?` | toggle help |
@@ -114,8 +136,8 @@ Normal mode:
 Both modes: `enter` jumps (a typed `/` or `~` path, or the query itself when it
 is an existing directory and nothing else matches, wins over the highlighted
 row), `alt+p` moves the pane, `alt+t` moves the tab, `alt+a` toggles the
-`git>`/`all>` source, `ctrl+x` closes the project's workspace, `ctrl+h` toggles
-help.
+`git` / `all` scope, `alt+v` toggles the workspace preview, `ctrl+x` closes the
+project's workspace, `?` (normal mode) toggles help.
 
 Search follows fzf `-e` extended search: space separated clauses are ANDed,
 `|` separates OR alternatives inside a clause (`foo | bar baz`), and terms can
@@ -123,10 +145,10 @@ be negated (`!term`, `!^prefix`, `!suffix$`), anchored (`^prefix`, `suffix$`)
 or forced to a plain substring (`'exact`). Rows keep their frecency order and
 matched substrings are highlighted.
 
-The cursor row is drawn with a `▌` pointer and painted in the theme's primary
-colour with a contrasting foreground, so it stays visible even on terminals
-where reverse video is indistinguishable. Rows also carry `◆` for the current
-project and `●` for projects whose workspace is already open.
+The active row carries a `▌` pointer over a subtle tinted highlight surface so
+directory paths, `[label]` tags, and fuzzy match underlines stay legible. Rows
+also show `◆` for the current project and `●` for projects whose workspace is
+already open.
 
 ## How it decides where to go
 
@@ -154,11 +176,6 @@ The state directory is `${XDG_STATE_HOME:-~/.local/state}/herdr/plugins/state/he
 (or `HERDR_PLUGIN_STATE_DIR`). Each Herdr socket gets a
 `<sha256(socket path)>.json` mapping file and a `.lock` next to it.
 
-The mapping from the old `zsh-jump` script
-(`${XDG_STATE_HOME:-~/.local/state}/herdr/zsh-jump/<hash>.json`) is imported
-non-destructively the first time it is needed: the legacy file is read and
-validated but never modified or removed.
-
 ## Development
 
 ```sh
@@ -170,15 +187,16 @@ make link     # herdr plugin link .
 
 Layout:
 
-- `herdr_zshz/config.py` — `names.tsv` loading and workspace labels
-- `herdr_zshz/settings.py` — `config.toml` loading and defaults
-- `herdr_zshz/frecency.py` — zsh-z data parsing, ranking and bucket ordering
-- `herdr_zshz/query.py` — fzf extended-search matcher and highlight spans
-- `herdr_zshz/state.py` — canonical/legacy state, recovery, atomic writes,
+- `herdr_zshz/config.py`: `names.tsv` loading and workspace labels
+- `herdr_zshz/settings.py`: `config.toml` loading, theme lookup, and defaults
+- `herdr_zshz/frecency.py`: zsh-z data parsing, ranking, and bucket ordering
+- `herdr_zshz/query.py`: fzf extended-search matcher and highlight spans
+- `herdr_zshz/state.py`: canonical/legacy state, recovery, atomic writes,
   close snapshots
-- `herdr_zshz/herdr.py` — Herdr CLI wrapper and split layout reconstruction
-- `herdr_zshz/tui.py` — Textual picker, modals and preview
-- `herdr_zshz/cli.py` — flags, `open-picker`, lock transaction and moves
+- `herdr_zshz/herdr.py`: Herdr CLI wrapper and split layout reconstruction
+- `herdr_zshz/picker.py`: backend resolution and `fzf`, `skim`, and `gum` runners
+- `herdr_zshz/tui.py`: theme-aware Textual picker, modals, and preview
+- `herdr_zshz/cli.py`: flags, `open-picker`, lock transaction, and moves
 
 ## License
 

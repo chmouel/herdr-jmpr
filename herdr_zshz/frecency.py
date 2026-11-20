@@ -128,7 +128,7 @@ def rank_paths(
     opened: set[str],
     show_all: bool,
 ) -> list[str]:
-    """Order paths as zsh-jump does: current, open projects, then frecency."""
+    """Order paths: current project first, open workspaces next, then frecency."""
 
     all_paths: list[str] = []
     git_paths: list[str] = []

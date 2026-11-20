@@ -110,7 +110,7 @@ def _same(left: dict, right: dict) -> bool:
 
 
 def layout_ops(layout: dict) -> list[str]:
-    """Rebuild the split tree from rects, as zsh-jump does with jq.
+    """Rebuild the split tree from pane and split rectangles.
 
     The second child of a split is the largest rect flush with the split's far
     edge. Returns the root anchor followed by one ``pane target direction

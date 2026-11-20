@@ -1,4 +1,4 @@
-"""Textual two-panel picker with fzf-style search and a vim mode."""
+"""Theme-aware Textual workspace switcher with fzf search and vim mode."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from rich.cells import cell_len
+from rich.style import Style
 from rich.text import Text
 from textual import events, work
 from textual.app import App, ComposeResult
@@ -15,6 +16,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.content import Content
 from textual.screen import ModalScreen
+from textual.theme import Theme
 from textual.widgets import Static
 
 from .config import workspace_label
@@ -27,12 +29,116 @@ from .frecency import (
     rank_paths,
 )
 from .herdr import Herdr, HerdrError
+from .picker import (
+    PickerError,
+    Result,
+    build_result,
+    resolve_typed_or_picked,
+    unknown_workspaces,
+)
 from .query import match_spans
+from .settings import SettingsError, herdr_theme_name
 from .state import StateError, snapshot_close_targets
+
+__all__ = [
+    "CANCELLED",
+    "ConfirmCloseModal",
+    "HERDR_INK_THEME",
+    "HelpModal",
+    "MAX_CLOSE_ROUNDS",
+    "PREVIEW_MIN_WIDTH",
+    "PickerApp",
+    "Result",
+    "Row",
+    "RowList",
+    "SelectWorkspaceModal",
+]
 
 CANCELLED = "cancelled"
 PREVIEW_MIN_WIDTH = 90
 MAX_CLOSE_ROUNDS = 5
+
+HERDR_INK_THEME = Theme(
+    name="herdr-ink",
+    primary="#B48EF7",
+    secondary="#7DCFFF",
+    warning="#F2C97D",
+    error="#F7768E",
+    success="#7EE787",
+    accent="#B48EF7",
+    foreground="#ECEFF4",
+    background="#161821",
+    surface="#1E2230",
+    panel="#2A3042",
+    dark=True,
+)
+
+_THEME_ALIASES = {
+    "catppuccin": "catppuccin-mocha",
+    "catppuccin_mocha": "catppuccin-mocha",
+    "catppuccin_latte": "catppuccin-latte",
+    "rose_pine": "rose-pine",
+    "rose_pine_moon": "rose-pine-moon",
+    "rose_pine_dawn": "rose-pine-dawn",
+    "tokyonight": "tokyo-night",
+    "tokyo_night": "tokyo-night",
+    "solarized_dark": "solarized-dark",
+    "solarized_light": "solarized-light",
+    "atom_one_dark": "atom-one-dark",
+    "atom_one_light": "atom-one-light",
+}
+
+
+def _parse_hex(colour: str | None) -> tuple[int, int, int] | None:
+    if not colour or not isinstance(colour, str) or not colour.startswith("#"):
+        return None
+    digits = colour[1:]
+    if len(digits) == 3:
+        digits = "".join(ch * 2 for ch in digits)
+    elif len(digits) == 8:
+        digits = digits[:6]
+    elif len(digits) != 6:
+        return None
+    try:
+        return (
+            int(digits[0:2], 16),
+            int(digits[2:4], 16),
+            int(digits[4:6], 16),
+        )
+    except ValueError:
+        return None
+
+
+def _blend_hex(base: str | None, accent: str | None, ratio: float) -> str | None:
+    rgb_a = _parse_hex(base)
+    rgb_b = _parse_hex(accent)
+    if rgb_a is None or rgb_b is None:
+        return None
+    clamped = max(0.0, min(1.0, ratio))
+    mixed = tuple(
+        round(a + (b - a) * clamped) for a, b in zip(rgb_a, rgb_b, strict=True)
+    )
+    return f"#{mixed[0]:02x}{mixed[1]:02x}{mixed[2]:02x}"
+
+
+def _contrast_ink(colour: str | None) -> str | None:
+    rgb = _parse_hex(colour)
+    if rgb is None:
+        return None
+    luma = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+    return "#11131a" if luma > 145 else "#ffffff"
+
+
+@dataclass(frozen=True)
+class Palette:
+    primary: str
+    secondary: str
+    warning: str
+    success: str
+    error: str
+    foreground: str
+    muted: str
+    selection_bg: str | None
 
 
 @dataclass
@@ -41,18 +147,6 @@ class Row:
     shown: str
     marker: str
     label: str
-
-
-@dataclass
-class Result:
-    kind: str
-    path: str
-    choice: tuple[str, str | None] | None = None
-    src_pane: str = ""
-    src_ws: str = ""
-    src_tab: str = ""
-    src_layout: dict | None = None
-    tab_label: str | None = None
 
 
 def _git(path: str, *args: str) -> str:
@@ -70,27 +164,20 @@ def _git(path: str, *args: str) -> str:
 
 
 class Bar(Static):
-    """A single-line bar painted from its own width.
+    """Single-line responsive bar painted against its settled content width."""
 
-    Right-aligned fields need the widget's *final* width. Building the text
-    while the widget paints (rather than pushing it in on resize) avoids the
-    one-frame lag where ``content_size`` still describes the previous layout.
-    """
-
-    def __init__(self, builder, **kwargs) -> None:
+    def __init__(self, builder: Callable[[int], Text], **kwargs) -> None:
         super().__init__("", markup=False, **kwargs)
         self._builder = builder
 
     def render(self) -> Content:
         width = self.content_size.width or self.size.width
         text = self._builder(max(10, width or 10))
-        # Resolve the style names into Style objects, as Static.update() would,
-        # so spans keep their attributes for anything inspecting them.
         return Content.from_rich_text(text, console=self.app.console)
 
 
 class RowList(Static):
-    """The rendered picker rows; selection is drawn into the text."""
+    """Workspace rows with tinted active bar and preserved per-token colours."""
 
     POINTER = "\u258c"
 
@@ -100,10 +187,19 @@ class RowList(Static):
         self.spans: list[list[tuple[int, int]]] = []
         self.selected = 0
         self.selected_row_style = "bold reverse"
+        self.palette = Palette(
+            primary="cyan",
+            secondary="cyan",
+            warning="yellow",
+            success="green",
+            error="red",
+            foreground="",
+            muted="dim",
+            selection_bg=None,
+        )
+        self.empty_hint: tuple[str, str] | None = None
 
     def on_resize(self, event: events.Resize) -> None:
-        # Layout has settled by the time this fires, so the sibling fields can
-        # re-render against their real widths.
         reflow = getattr(self.app, "reflow", None)
         if reflow is not None:
             reflow()
@@ -114,12 +210,17 @@ class RowList(Static):
         spans: list[list[tuple[int, int]]],
         selected: int,
         selected_row_style: str | None = None,
+        palette: Palette | None = None,
+        empty_hint: tuple[str, str] | None = None,
     ) -> None:
         self.rows = rows
         self.spans = spans
         self.selected = selected
         if selected_row_style:
             self.selected_row_style = selected_row_style
+        if palette is not None:
+            self.palette = palette
+        self.empty_hint = empty_hint
         self.styles.height = max(len(rows), 1)
         self.update(self._build_text())
 
@@ -132,22 +233,37 @@ class RowList(Static):
     def _build_text(self) -> Text:
         text = Text()
         width = self._row_width()
+        palette = self.palette
+        if not self.rows:
+            if self.empty_hint is not None:
+                message, style = self.empty_hint
+            else:
+                message = "  No matching workspaces — press M-a for all dirs or type a path"
+                style = palette.muted
+            line = Text(message, style=style)
+            if width:
+                line.truncate(width, overflow="ellipsis")
+            text.append_text(line)
+            return text
+
+        tinted = self.selected_row_style.startswith("on ")
         for index, row in enumerate(self.rows):
             line = Text()
             selected = index == self.selected
-            # fzf's pointer bar: a colour-independent cue that survives
-            # terminals where reverse video is indistinguishable.
-            line.append(self.POINTER if selected else " ", style="bold")
+            keep_tokens = not selected or tinted
+
+            pointer_style = f"bold {palette.primary}" if keep_tokens else "bold"
+            line.append(f"{self.POINTER} " if selected else "  ", style=pointer_style)
+
             if row.marker == CURRENT_MARK:
-                marker_style = "bold" if selected else "bold yellow"
+                marker_style = f"bold {palette.warning}" if keep_tokens else "bold"
             elif row.marker == OPEN_MARK:
-                marker_style = "bold" if selected else "bold cyan"
+                marker_style = f"bold {palette.success}" if keep_tokens else "bold"
             else:
                 marker_style = ""
             line.append(row.marker, style=marker_style)
             line.append(" ")
-            # row.shown is appended untouched so the match spans keep their
-            # offsets; hierarchy is painted over slices of that run.
+
             shown = row.shown
             suffix_start = shown.rfind("  [")
             if suffix_start != -1 and shown.endswith("]"):
@@ -157,29 +273,44 @@ class RowList(Static):
             dir_end = body.rfind("/") + 1
             hot = row.marker in (CURRENT_MARK, OPEN_MARK)
             line.append(shown)
-            offset = 3
-            if selected:
-                # No foreground colours here: selected_row_style wins.
-                if len(body) > dir_end:
-                    line.stylize("bold", offset + dir_end, offset + len(body))
-            else:
+            offset = 4
+
+            if keep_tokens:
                 if dir_end:
-                    line.stylize("dim", offset, offset + dir_end)
-                if hot and len(body) > dir_end:
-                    line.stylize("bold", offset + dir_end, offset + len(body))
+                    line.stylize(palette.muted, offset, offset + dir_end)
+                if len(body) > dir_end:
+                    base_style = (
+                        f"bold {palette.foreground}".strip()
+                        if (selected or hot)
+                        else palette.foreground
+                    )
+                    if base_style:
+                        line.stylize(base_style, offset + dir_end, offset + len(body))
                 if suffix:
-                    suffix_style = "cyan" if hot else "dim italic cyan"
-                    line.stylize(suffix_style, offset + len(body), offset + len(shown))
-            match_style = "bold underline" if selected else "bold yellow underline"
+                    suffix_style = (
+                        palette.secondary
+                        if (selected or hot)
+                        else f"italic {palette.secondary}"
+                    )
+                    gap_len = len(suffix) - len(suffix.lstrip(" "))
+                    line.stylize(
+                        suffix_style, offset + len(body) + gap_len, offset + len(shown)
+                    )
+            elif len(body) > dir_end:
+                line.stylize("bold", offset + dir_end, offset + len(body))
+
+            match_style = (
+                f"bold underline {palette.warning}"
+                if keep_tokens
+                else "bold underline"
+            )
             for start, end in self.spans[index]:
                 start = max(0, min(start, len(shown)))
                 end = max(start, min(end, len(shown)))
-                if end <= start:
-                    continue
-                line.stylize(match_style, offset + start, offset + end)
+                if end > start:
+                    line.stylize(match_style, offset + start, offset + end)
+
             if width:
-                # Truncate instead of wrapping, and give the cursor row a bar
-                # that spans the whole column rather than just its text.
                 line.truncate(width, overflow="ellipsis", pad=selected)
             if selected:
                 line.stylize(self.selected_row_style)
@@ -194,28 +325,34 @@ class ConfirmCloseModal(ModalScreen[bool]):
         self.label = label
         self.agents = agents
 
+    def _palette(self) -> Palette:
+        getter = getattr(self.app, "palette", None)
+        if callable(getter):
+            return getter()
+        return Palette("cyan", "cyan", "yellow", "green", "red", "", "dim", None)
+
     def _content(self) -> Text:
+        palette = self._palette()
         text = Text()
-        text.append("Close ", style="bold")
-        text.append(self.label, style="bold yellow")
+        text.append("Close ", style=f"bold {palette.foreground}".strip())
+        text.append(self.label, style=f"bold {palette.warning}")
         text.append("?\n\n")
         if self.agents:
-            text.append("Running there: ", style="dim")
-            text.append(", ".join(self.agents), style="bold red")
+            text.append("Active agents: ", style=palette.muted)
+            text.append(", ".join(self.agents), style=f"bold {palette.error}")
             text.append("\n\n")
-        text.append("[", style="dim")
-        text.append("y", style="bold reverse")
-        text.append("/", style="dim")
-        text.append("N", style="bold reverse")
-        text.append("]", style="dim")
-        text.append(" close    ", style="dim")
-        text.append(" Esc ", style="bold")
-        text.append(" cancel", style="dim")
+        text.append("[y/N]", style=f"bold {palette.warning}")
+        text.append(" ")
+        text.append("confirm", style=palette.muted)
+        text.append("    ")
+        text.append("Esc", style=f"bold {palette.primary}")
+        text.append(" ")
+        text.append("cancel", style=palette.muted)
         return text
 
     def compose(self) -> ComposeResult:
         panel = Static(self._content(), id="confirm")
-        panel.border_title = " Confirm Close "
+        panel.border_title = " Close workspace "
         yield panel
 
     def on_key(self, event: events.Key) -> None:
@@ -240,26 +377,42 @@ class SelectWorkspaceModal(ModalScreen[tuple[str, str | None] | None]):
 
     def compose(self) -> ComposeResult:
         panel = Static(self._option_text(), id="select")
-        panel.border_title = " Workspace Conflict "
+        panel.border_title = " Workspace conflict "
         yield panel
+
+    def _palette(self) -> Palette:
+        getter = getattr(self.app, "palette", None)
+        if callable(getter):
+            return getter()
+        return Palette("cyan", "cyan", "yellow", "green", "red", "", "dim", None)
 
     def _selection_style(self) -> str:
         style = getattr(self.app, "selection_style", None)
         return style() if callable(style) else "bold reverse"
 
     def _option_text(self) -> Text:
+        palette = self._palette()
+        row_style = self._selection_style()
+        tinted = row_style.startswith("on ")
         text = Text()
-        text.append("Select workspace for ", style="bold")
-        text.append(self.label, style="bold yellow")
+        text.append("Select workspace for ", style=f"bold {palette.foreground}".strip())
+        text.append(self.label, style=f"bold {palette.warning}")
         text.append("\n\n")
-        for index, option in enumerate(self.options()):
+        options = self.options()
+        width = max((cell_len(opt) + 3 for opt in options), default=24)
+        for index, option in enumerate(options):
+            line = Text()
             if index == self.index:
-                style = self._selection_style()
-                text.append("\u258c ", style=style)
-                text.append(option, style=style)
+                pointer_style = f"bold {palette.primary}" if tinted else "bold"
+                label_style = f"bold {palette.foreground}".strip() if tinted else ""
+                line.append("\u258c ", style=pointer_style)
+                line.append(option, style=label_style)
+                line.truncate(width, pad=True)
+                line.stylize(row_style)
             else:
-                text.append("  " + option)
-            if index < len(self.options()) - 1:
+                line.append("  " + option, style=palette.foreground)
+            text.append_text(line)
+            if index < len(options) - 1:
                 text.append("\n")
         return text
 
@@ -289,12 +442,13 @@ HELP_GROUPS = [
             ("alt-p", "move pane here"),
             ("alt-t", "move tab here"),
             ("alt-a", "git / all dirs"),
+            ("alt-v", "toggle preview"),
             ("ctrl-x", "close workspace"),
             ("? ctrl-h", "toggle help"),
         ],
     ),
     (
-        "Insert",
+        "Insert mode",
         [
             ("a-z", "type to filter"),
             ("ctrl-n/p", "move cursor"),
@@ -305,16 +459,17 @@ HELP_GROUPS = [
         ],
     ),
     (
-        "Normal",
+        "Normal mode",
         [
             ("j/k", "move cursor"),
             ("gg G", "first / last"),
-            ("ctrl-d/u", "half page up/down"),
-            ("H M L", "top/mid/bottom"),
+            ("ctrl-d/u", "half page"),
+            ("H M L", "top / mid / bottom"),
             ("i a /", "insert mode"),
             ("dd", "clear query"),
+            ("v", "toggle preview"),
             ("x", "close workspace"),
-            ("p t", "move pane/tab"),
+            ("p t", "move pane / tab"),
             ("q", "quit"),
         ],
     ),
@@ -322,25 +477,38 @@ HELP_GROUPS = [
 
 
 class HelpModal(ModalScreen[None]):
+    def _palette(self) -> Palette:
+        getter = getattr(self.app, "palette", None)
+        if callable(getter):
+            return getter()
+        return Palette("cyan", "cyan", "yellow", "green", "red", "", "dim", None)
+
     @staticmethod
-    def _entry(key: str, description: str) -> Text:
+    def _entry(key: str, description: str, key_style: str, desc_style: str) -> Text:
         entry = Text()
-        entry.append(f"  {key:<12}", style="bold")
-        entry.append(description, style="dim")
+        entry.append(f"  {key:<11}", style=key_style)
+        entry.append(description, style=desc_style)
         return entry
 
     def _content(self) -> Text:
+        palette = self._palette()
+        key_style = f"bold {palette.foreground}".strip() or "bold"
         text = Text()
         for group_index, (title, items) in enumerate(HELP_GROUPS):
             if group_index:
                 text.append("\n")
-            text.append(title.upper(), style="bold cyan")
+            text.append(title, style=f"bold {palette.primary}")
             text.append("\n")
             half = (len(items) + 1) // 2
             columns = [items[:half], items[half:]]
             widths = [
                 max(
-                    (cell_len(self._entry(key, description).plain) for key, description in column),
+                    (
+                        cell_len(
+                            self._entry(key, description, key_style, palette.muted).plain
+                        )
+                        for key, description in column
+                    ),
                     default=0,
                 )
                 for column in columns
@@ -348,19 +516,21 @@ class HelpModal(ModalScreen[None]):
             for index in range(half):
                 for column_index, column in enumerate(columns):
                     if index < len(column):
-                        entry = self._entry(*column[index])
+                        entry = self._entry(
+                            *column[index], key_style=key_style, desc_style=palette.muted
+                        )
                         text.append_text(entry)
                         if column_index == 0:
-                            text.append(" " * (widths[0] - entry.cell_len + 2))
+                            text.append(" " * (widths[0] - entry.cell_len + 3))
                     elif column_index == 0:
-                        text.append(" " * (widths[0] + 2))
+                        text.append(" " * (widths[0] + 3))
                 text.append("\n")
         return text
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="help-scroll"):
             panel = Static(self._content(), id="help")
-            panel.border_title = " Keyboard Shortcuts "
+            panel.border_title = " Keyboard shortcuts "
             yield panel
 
     def on_key(self, event: events.Key) -> None:
@@ -369,6 +539,8 @@ class HelpModal(ModalScreen[None]):
 
 
 class PickerApp(App[Result | None]):
+    TITLE = "herdr-zshz"
+
     BINDINGS = [
         Binding("ctrl+c", "quit_now", show=False, priority=True),
         Binding("ctrl+g", "quit_now", show=False, priority=True),
@@ -376,33 +548,51 @@ class PickerApp(App[Result | None]):
 
     DEFAULT_CSS = """
     Screen { layout: vertical; background: $background; }
-    #title { height: 1; background: $surface; color: $text-muted; padding: 0 1; }
-    #query { height: 1; background: $boost; padding: 0 1; }
+    #query {
+        height: 2;
+        background: $surface;
+        padding: 0 2;
+        border-bottom: solid $panel;
+    }
     #body { height: 1fr; background: $background; }
-    #list-scroll { width: 1fr; height: 1fr; scrollbar-size-vertical: 1; }
+    #list-scroll {
+        width: 1fr;
+        height: 1fr;
+        margin-top: 1;
+        padding: 0 1;
+        scrollbar-size-vertical: 1;
+        background: $background;
+    }
     #list { text-wrap: nowrap; text-overflow: ellipsis; }
     #preview {
-        width: 38%;
+        width: 40%;
         height: 1fr;
-        padding: 0 1;
+        padding: 1 2;
+        background: $surface;
         border-left: solid $panel;
     }
-    #status { height: 1; background: $surface; color: $text-muted; padding: 0 1; }
+    #status {
+        height: 2;
+        background: $surface;
+        color: $text-muted;
+        padding: 0 2;
+        border-top: solid $panel;
+    }
     ConfirmCloseModal, SelectWorkspaceModal, HelpModal {
         align: center middle;
-        background: $background 60%;
+        background: $background 68%;
     }
     #confirm, #select, #help {
         width: auto;
-        max-width: 90%;
+        max-width: 92%;
         height: auto;
         padding: 1 2;
         border: round $primary;
         background: $surface;
     }
     #confirm { border: round $warning; }
-    #help-scroll { width: auto; height: auto; max-height: 100%; max-width: 90%; }
-    #help { max-width: 100%; }
+    #help-scroll { width: auto; height: auto; max-height: 100%; max-width: 92%; }
+    #help { padding: 0 2; max-width: 100%; }
     """
 
     def __init__(
@@ -421,8 +611,11 @@ class PickerApp(App[Result | None]):
         strict_mapping_reader: Callable[[], dict[str, str]] | None = None,
         history: list[str] | None = None,
         start_mode: str = "insert",
+        theme_setting: str = "auto",
     ) -> None:
         super().__init__()
+        self._ui_mounted = False
+        self.register_theme(HERDR_INK_THEME)
         self.paths = {"git": paths_git, "all": paths_all}
         self.current = current
         self.opened = opened
@@ -445,26 +638,121 @@ class PickerApp(App[Result | None]):
         self.spans: list[list[tuple[int, int]]] = []
         self.index = 0
         self.preview_lines: list[str] = []
+        self.preview_override: bool | None = None
         self._preview_path = ""
         self._preview_cache: dict[str, list[str]] = {}
         self._preview_generation = 0
         self._last_width = 0
         self._frame_width = 0
+        self.theme = self._resolve_theme(theme_setting)
+
+    def _resolve_theme(self, configured: str) -> str:
+        available = self.available_themes
+        if configured == "auto":
+            detected = herdr_theme_name()
+            if detected:
+                candidate = self._match_theme_name(detected, available)
+                if candidate:
+                    return candidate
+            return "herdr-ink"
+        candidate = self._match_theme_name(configured, available)
+        if candidate is None:
+            names = ", ".join(sorted(available))
+            raise SettingsError(
+                f"Unknown theme {configured!r}; available themes: {names}"
+            )
+        return candidate
+
+    @staticmethod
+    def _match_theme_name(name: str, available: set[str] | dict) -> str | None:
+        lowered = name.strip().lower()
+        if lowered in available:
+            return lowered
+        alias = _THEME_ALIASES.get(lowered)
+        if alias and alias in available:
+            return alias
+        hyphenated = lowered.replace("_", "-")
+        if hyphenated in available:
+            return hyphenated
+        return None
 
     def compose(self) -> ComposeResult:
-        yield Bar(self._title_text, id="title")
         yield Bar(self._query_text, id="query")
         with Horizontal(id="body"):
-            # Not focusable: otherwise the container eats down/up and scrolls on
-            # its own, which drags the list along with every cursor move.
             with VerticalScroll(id="list-scroll", can_focus=False):
                 yield RowList(id="list")
             yield Static("", id="preview", markup=False)
         yield Bar(self._footer_text, id="status")
 
     def on_mount(self) -> None:
+        self._ui_mounted = True
         self.set_rows()
         self.show_preview()
+
+    def watch_theme(self, _theme_name: str) -> None:
+        if getattr(self, "_ui_mounted", False):
+            self.apply_filter(keep_selection=True)
+            self.reflow()
+
+    # -- theme & palette --------------------------------------------------
+
+    def palette(self) -> Palette:
+        theme = getattr(self, "current_theme", None)
+        primary = getattr(theme, "primary", "") or ""
+        secondary = getattr(theme, "secondary", "") or ""
+        warning = getattr(theme, "warning", "") or ""
+        success = getattr(theme, "success", "") or ""
+        error = getattr(theme, "error", "") or ""
+        foreground = getattr(theme, "foreground", "") or ""
+        background = getattr(theme, "background", "") or ""
+        surface = getattr(theme, "surface", "") or background
+        dark = bool(getattr(theme, "dark", True))
+
+        selection_bg = _blend_hex(
+            background or surface, primary, 0.22 if dark else 0.16
+        )
+        muted = _blend_hex(background or surface, foreground, 0.56) or "dim"
+        return Palette(
+            primary=primary if _parse_hex(primary) else "cyan",
+            secondary=secondary if _parse_hex(secondary) else "cyan",
+            warning=warning if _parse_hex(warning) else "yellow",
+            success=success if _parse_hex(success) else "green",
+            error=error if _parse_hex(error) else "red",
+            foreground=foreground if _parse_hex(foreground) else "",
+            muted=muted,
+            selection_bg=selection_bg,
+        )
+
+    def selection_style(
+        self, attribute: str = "primary", fallback: str = "bold reverse"
+    ) -> str:
+        """Return the tinted row background style, or fallback for non-hex themes."""
+        theme = getattr(self, "current_theme", None)
+        colour = getattr(theme, attribute, "") or ""
+        if _parse_hex(colour) is None:
+            return fallback
+        if attribute == "primary":
+            background = (
+                getattr(theme, "background", "")
+                or getattr(theme, "surface", "")
+                or "#161821"
+            )
+            dark = bool(getattr(theme, "dark", True))
+            tinted = _blend_hex(background, colour, 0.22 if dark else 0.16)
+            if tinted is not None:
+                return f"on {tinted}"
+        ink = _contrast_ink(colour)
+        if ink is None:
+            return fallback
+        return f"bold {ink} on {colour}"
+
+    def chip_style(self, attribute: str = "warning") -> str:
+        theme = getattr(self, "current_theme", None)
+        colour = getattr(theme, attribute, "") or ""
+        ink = _contrast_ink(colour)
+        if ink is None:
+            return "bold reverse"
+        return f"bold {ink} on {colour}"
 
     # -- rows -------------------------------------------------------------
 
@@ -492,10 +780,23 @@ class PickerApp(App[Result | None]):
     def set_rows(self) -> None:
         self.rows = self.build_rows()
         self.apply_filter(keep_selection=True)
-        self.update_title()
+
+    def _empty_hint(self, palette: Palette) -> tuple[str, str]:
+        typed = self.typed_target()
+        if typed:
+            return (
+                f"  \u23ce  Open directory {display_path(typed)}",
+                f"bold {palette.success}",
+            )
+        scope_tip = "type a path to open" if self.show_all else "press M-a for all dirs"
+        return (f"  No matching workspaces \u00b7 {scope_tip}", palette.muted)
 
     def apply_filter(self, keep_selection: bool = False) -> None:
-        previous = self.filtered[self.index].path if self.filtered and self.index < len(self.filtered) else None
+        previous = (
+            self.filtered[self.index].path
+            if self.filtered and self.index < len(self.filtered)
+            else None
+        )
         self.filtered = []
         self.spans = []
         for row in self.rows:
@@ -511,8 +812,14 @@ class PickerApp(App[Result | None]):
             else:
                 self.index = 0
         self.index = max(0, min(self.index, len(self.filtered) - 1))
+        palette = self.palette()
         self.row_list.set_rows(
-            self.filtered, self.spans, self.index, self.selection_style()
+            self.filtered,
+            self.spans,
+            self.index,
+            self.selection_style(),
+            palette=palette,
+            empty_hint=self._empty_hint(palette),
         )
         self.scroll_selection()
         self.update_status()
@@ -528,11 +835,7 @@ class PickerApp(App[Result | None]):
         return None
 
     def scroll_selection(self) -> None:
-        """Scroll only when the cursor leaves the viewport, like fzf.
-
-        The list stays put while the cursor moves inside it; it scrolls by the
-        minimum needed to keep the cursor visible.
-        """
+        """Scroll only when the cursor crosses the viewport edge."""
         container = self.query_one("#list-scroll", VerticalScroll)
         height = max(1, container.size.height)
         top = max(0, int(container.scroll_offset.y))
@@ -541,36 +844,18 @@ class PickerApp(App[Result | None]):
         elif self.index >= top + height:
             container.scroll_to(y=self.index - height + 1, animate=False)
 
-    def selection_style(
-        self, attribute: str = "primary", fallback: str = "bold reverse"
-    ) -> str:
-        """A selection bar that contrasts whatever theme the popup runs with.
-
-        Reverse video alone can be invisible on some profiles, so paint the row
-        with a theme colour and the readable one of black/white.
-        """
-        theme = getattr(self.app, "current_theme", None)
-        colour = getattr(theme, attribute, "") or ""
-        if not colour.startswith("#") or len(colour) not in (4, 7):
-            return fallback
-        digits = colour[1:]
-        if len(digits) == 3:
-            digits = "".join(character * 2 for character in digits)
-        try:
-            red, green, blue = (int(digits[index : index + 2], 16) for index in (0, 2, 4))
-        except ValueError:
-            return fallback
-        # Rec. 601 luma, good enough to pick a legible foreground.
-        luma = 0.299 * red + 0.587 * green + 0.114 * blue
-        foreground = "#000000" if luma > 140 else "#ffffff"
-        return f"bold {foreground} on {colour}"
-
     def set_index(self, index: int) -> None:
         if not self.filtered:
             return
         self.index = max(0, min(index, len(self.filtered) - 1))
+        palette = self.palette()
         self.row_list.set_rows(
-            self.filtered, self.spans, self.index, self.selection_style()
+            self.filtered,
+            self.spans,
+            self.index,
+            self.selection_style(),
+            palette=palette,
+            empty_hint=self._empty_hint(palette),
         )
         self.scroll_selection()
         self.show_preview()
@@ -578,29 +863,9 @@ class PickerApp(App[Result | None]):
     def _content_width(self, selector: str) -> int:
         widget = self.query_one(selector)
         width = widget.content_size.width
-        # content_size can still describe the previous size during a resize;
-        # on_resize schedules a reflow once layout settles, and this fallback
-        # keeps the first, pre-layout paint inside the new frame.
         if width <= 0:
-            width = (self._frame_width or self.size.width) - 2
+            width = (self._frame_width or self.size.width) - 4
         return max(10, width)
-
-    def update_title(self) -> None:
-        self.query_one("#title", Static).refresh()
-
-    def _title_text(self, width: int) -> Text:
-        hint = "[all dirs]" if self.show_all else "[git roots]"
-        line = Text()
-        if self.move_mode == "pane":
-            line.append(" MOVE PANE ", style="bold reverse yellow")
-        elif self.move_mode == "tab":
-            line.append(" MOVE TAB ", style="bold reverse yellow")
-        else:
-            line.append("Select project workspace")
-        gap = max(1, width - cell_len(str(line)) - cell_len(hint))
-        line.append(" " * gap)
-        line.append(hint, style="dim")
-        return line
 
     @staticmethod
     def _cell_index(cells: str, width: int) -> int:
@@ -627,8 +892,19 @@ class PickerApp(App[Result | None]):
             used += char_width
         return value
 
-    def _query_segment(self, avail: int) -> Text:
+    def _query_segment(self, avail: int, palette: Palette) -> Text:
         avail = max(1, avail)
+        cursor_style = Style(reverse=True)
+        if not self.query and self.mode == "insert":
+            segment = Text()
+            segment.append(" ", style=cursor_style)
+            if avail > 1:
+                placeholder = self._ellipsise(
+                    "Filter workspaces or type a path\u2026", avail - 1
+                )
+                segment.append(placeholder, style=palette.muted)
+            return segment
+
         query, cursor = self.query, self.cursor
         cells = query + (" " if cursor == len(query) else "")
         if not cells:
@@ -641,8 +917,6 @@ class PickerApp(App[Result | None]):
             if before + cell_len(cells[cursor]) <= avail:
                 end = self._cell_index(cells, avail)
             else:
-                # Reserve one cell for the leading ellipsis and grow the
-                # window backwards from the cursor so it always stays visible.
                 ellipsis = True
                 budget = max(1, avail - 1)
                 start = cursor
@@ -658,59 +932,79 @@ class PickerApp(App[Result | None]):
                     end += 1
         segment = Text()
         if ellipsis:
-            segment.append("\u2026", style="dim")
+            segment.append("\u2026", style=palette.muted)
+        text_style = f"bold {palette.foreground}".strip()
         for index in range(start, end):
-            segment.append(cells[index], style="reverse" if index == cursor else "")
+            if index == cursor:
+                segment.append(cells[index], style=cursor_style)
+            else:
+                segment.append(cells[index], style=text_style)
         return segment
 
     def update_query_bar(self) -> None:
         self.query_one("#query", Static).refresh()
 
     def _query_text(self, width: int) -> Text:
-        pill = " INSERT " if self.mode == "insert" else " NORMAL "
-        if self.mode == "insert":
-            pill_style = "bold reverse"
-        else:
-            pill_style = self.selection_style("secondary")
-        meta_style = self.selection_style("secondary")
-        prompt = "all\u276f " if self.show_all else "git\u276f "
-        meta = f"{len(self.filtered)}/{len(self.rows)}"
-        prefix = f"{pill}{prompt}"
-        prefix_width = cell_len(prefix)
-        meta_width = cell_len(meta)
-        avail = max(1, width - prefix_width - meta_width - 1)
+        palette = self.palette()
         line = Text()
-        line.append(pill, style=pill_style)
-        line.append(prompt, style="bold cyan")
+
+        if self.move_mode == "pane":
+            line.append(" move pane ", style=self.chip_style("warning"))
+            line.append(" ")
+        elif self.move_mode == "tab":
+            line.append(" move tab ", style=self.chip_style("warning"))
+            line.append(" ")
+
+        if self.mode == "normal":
+            line.append(" normal ", style=self.chip_style("secondary"))
+            line.append(" ")
+
+        prompt = "all \u203a " if self.show_all else "git \u203a "
+        line.append(prompt, style=f"bold {palette.primary}")
+
+        count_text = f"{len(self.filtered)}/{len(self.rows)}"
+        scope_text = "[all]" if self.show_all else "[git]"
+        right = Text()
+        right.append(count_text, style=palette.muted)
+        right.append("  ")
+        right.append(scope_text, style=f"bold {palette.secondary}")
+
+        avail = max(1, width - line.cell_len - right.cell_len - 2)
         if self.error:
-            line.append(self._ellipsise(self.error, avail), style="bold red")
+            line.append(
+                self._ellipsise(self.error, avail), style=f"bold {palette.error}"
+            )
         else:
-            line.append_text(self._query_segment(avail))
-        gap = max(1, width - line.cell_len - meta_width)
+            line.append_text(self._query_segment(avail, palette))
+
+        gap = max(1, width - line.cell_len - right.cell_len)
         line.append(" " * gap)
-        line.append(meta, style=meta_style)
+        line.append_text(right)
         if line.cell_len > width:
             line.truncate(width, overflow="ellipsis")
         return line
 
-    @staticmethod
-    def _keycaps(parts: list[tuple[str, str]]) -> Text:
+    def _keycaps(self, parts: list[tuple[str, str]], wide: bool) -> Text:
+        palette = self.palette()
+        separator = "   " if wide else "  "
         line = Text()
         for index, (key, label) in enumerate(parts):
             if index:
-                line.append("  ")
-            line.append(key, style="bold")
-            line.append(f" {label}", style="dim")
+                line.append(separator)
+            line.append(key, style=f"bold {palette.primary}")
+            line.append(" ")
+            line.append(label, style=palette.muted)
         return line
 
     def _footer_text(self, width: int) -> Text:
-        narrow = width < 90
+        narrow = width < 88
+        scope_action = "git only" if self.show_all else "all dirs"
         if self.mode == "insert":
             if narrow:
                 parts = [
                     ("\u23ce", "jump"),
                     ("M-p/t", "move"),
-                    ("M-a", "all"),
+                    ("M-a", "scope"),
                     ("^X", "close"),
                     ("Esc", "normal"),
                     ("?", "help"),
@@ -720,7 +1014,8 @@ class PickerApp(App[Result | None]):
                     ("\u23ce", "jump"),
                     ("M-p", "pane"),
                     ("M-t", "tab"),
-                    ("M-a", "all dirs"),
+                    ("M-a", scope_action),
+                    ("M-v", "preview"),
                     ("^X", "close"),
                     ("Esc", "normal"),
                     ("?", "help"),
@@ -742,13 +1037,17 @@ class PickerApp(App[Result | None]):
                 ("j/k", "move"),
                 ("i/a/\u2571", "filter"),
                 ("dd", "clear"),
+                ("v", "preview"),
                 ("p", "pane"),
                 ("t", "tab"),
                 ("x", "close"),
                 ("?", "help"),
                 ("q", "quit"),
             ]
-        return self._keycaps(parts)
+        rendered = self._keycaps(parts, wide=not narrow)
+        if rendered.cell_len > width:
+            rendered.truncate(width, overflow="ellipsis")
+        return rendered
 
     def update_status(self) -> None:
         self.update_query_bar()
@@ -760,9 +1059,34 @@ class PickerApp(App[Result | None]):
 
     # -- preview ----------------------------------------------------------
 
+    def _preview_should_display(self, width: int | None = None) -> bool:
+        if self.preview_override is not None:
+            return self.preview_override
+        effective = width if width is not None else (self._frame_width or self.size.width)
+        return effective >= PREVIEW_MIN_WIDTH
+
+    def toggle_preview(self) -> None:
+        current = self._preview_should_display()
+        self.preview_override = not current
+        self.update_preview()
+        self.call_after_refresh(self.reflow)
+
     def show_preview(self) -> None:
         row = self.selected_row()
         if row is None:
+            typed = self.typed_target()
+            if typed:
+                self._preview_path = typed
+                cached = self._preview_cache.get(typed)
+                if cached is not None:
+                    self.preview_lines = cached
+                    self.update_preview()
+                    return
+                label = workspace_label(typed, self.names)
+                self.preview_lines = [typed, f"label: {label}"]
+                self.update_preview()
+                self.load_preview(typed)
+                return
             self._preview_path = ""
             self.preview_lines = ["(no match)"]
             self.update_preview()
@@ -780,31 +1104,30 @@ class PickerApp(App[Result | None]):
     def invalidate_previews(self) -> None:
         self._preview_cache.clear()
         self._preview_path = ""
-        # Workers started before this point would cache data we just dropped.
         self._preview_generation += 1
 
     def update_preview(self) -> None:
         preview = self.query_one("#preview", Static)
-        preview.display = (self._frame_width or self.size.width) >= PREVIEW_MIN_WIDTH
+        preview.display = self._preview_should_display()
         if not preview.display:
             return
         preview.update(self._preview_text())
 
     def _preview_text(self) -> Text:
+        palette = self.palette()
         lines = self.preview_lines
         text = Text()
         if not lines:
             return text
         path = lines[0]
+        width = max(12, self._content_width("#preview"))
         if path == "(no match)":
-            text.append(path, style="dim")
+            text.append("No matching workspace\n", style=f"bold {palette.foreground}".strip())
+            text.append(
+                "Press Alt+A to search all directories, or type a directory path to open it directly.",
+                style=palette.muted,
+            )
             return text
-        width = max(10, self._content_width("#preview") - 1)
-        basename = os.path.basename(path.rstrip("/")) or path
-        text.append(basename, style="bold")
-        text.append("\n")
-        text.append(self._fit(display_path(path), width), style="dim")
-        text.append("\n\n")
 
         label = ""
         open_line: str | None = None
@@ -823,17 +1146,41 @@ class PickerApp(App[Result | None]):
             elif line.startswith("last: "):
                 last_line = line[len("last: ") :]
 
-        text.append("WORKSPACE", style="dim")
+        basename = os.path.basename(path.rstrip("/")) or path
+        title = Text()
+        title.append(basename, style=f"bold {palette.foreground}".strip() or "bold")
+        if label and label != basename:
+            title.append("  ")
+            title.append(f"[{label}]", style=f"bold {palette.secondary}")
+        title.truncate(width, overflow="ellipsis")
+        text.append_text(title)
         text.append("\n")
-        self._append_field(text, "label", label)
+        text.append(self._ellipsise(display_path(path), width), style=palette.muted)
+        text.append("\n\n")
+
         if open_line is None:
-            self._append_field(text, "status", "loading\u2026", style="dim")
+            text.append("\u25cc  Checking workspace\u2026\n", style=palette.muted)
         elif open_line == "no":
-            self._append_field(text, "status", "\u25cb closed", style="dim")
+            if self.selected_row() is None and self.typed_target() == path:
+                text.append(
+                    "\u23ce  Press Enter to open new workspace\n",
+                    style=f"bold {palette.success}",
+                )
+            else:
+                text.append("\u25cb  Closed\n", style=palette.muted)
         else:
-            self._append_field(text, "status", f"\u25cf open ({open_line})", style="bold green")
+            if path == self.current:
+                text.append(
+                    f"\u25c6  Current workspace ({open_line})\n",
+                    style=f"bold {palette.warning}",
+                )
+            else:
+                text.append(
+                    f"\u25cf  Open ({open_line})\n",
+                    style=f"bold {palette.success}",
+                )
             if not details:
-                self._append_field(text, "tabs", "-")
+                self._append_field(text, "tabs", "-", palette, width)
             for detail in details:
                 body = detail[len("tabs:") :].strip()
                 if "agents:" in body:
@@ -841,63 +1188,115 @@ class PickerApp(App[Result | None]):
                     tabs, agents = tabs.strip(" ,"), agents.strip()
                 else:
                     tabs, agents = body, ""
-                self._append_field(text, "tabs", tabs or "-")
+                self._append_field(
+                    text, "tabs", tabs or "-", palette, width, style=palette.foreground
+                )
                 if agents:
-                    self._append_field(text, "agents", agents, style="bold yellow")
+                    self._append_field(
+                        text,
+                        "agents",
+                        f"\u26a1 {agents}",
+                        palette,
+                        width,
+                        style=f"bold {palette.warning}",
+                    )
 
         if git_line:
-            text.append("\u2500" * width, style="dim")
-            text.append("\n")
-            text.append("GIT", style="dim")
             text.append("\n")
             branch, _, rest = git_line.partition(" (")
             state, _, tail = rest.partition(")")
-            key = f"{'branch':<9}"
-            text.append(f"  {key}", style="dim")
-            text.append(branch, style="bold")
+            git_header = Text()
+            git_header.append(f"\u2387 {branch}", style=f"bold {palette.primary}")
             if state:
-                text.append(" (")
-                text.append(state, style="bold yellow" if state.startswith("dirty") else "green")
-                text.append(")")
-            if tail:
-                text.append(tail, style="cyan")
+                git_header.append("  ")
+                state_style = (
+                    f"bold {palette.warning}"
+                    if state.startswith("dirty")
+                    else palette.success
+                )
+                git_header.append(state, style=state_style)
+            if tail.strip():
+                git_header.append("  ")
+                git_header.append(tail.strip(), style=f"bold {palette.secondary}")
+            git_header.truncate(width, overflow="ellipsis")
+            text.append_text(git_header)
             text.append("\n")
             if last_line:
-                key = f"{'commit':<9}"
-                text.append(f"  {key}", style="dim")
-                room = max(1, width - len(key) - 2)
-                text.append(self._fit(last_line, room), style="italic")
+                wrapped = self._wrap_subject(last_line, width, max_lines=3)
+                text.append(wrapped, style=f"italic {palette.muted}")
         return text
 
-    @staticmethod
-    def _fit(value: str, width: int) -> str:
-        if width <= 0 or len(value) <= width:
-            return value
-        if width == 1:
-            return "\u2026"
-        return value[: width - 1] + "\u2026"
+    @classmethod
+    def _wrap_subject(cls, value: str, width: int, max_lines: int = 3) -> str:
+        width = max(8, width)
+        words = value.split()
+        if not words:
+            return ""
+        lines: list[str] = []
+        current = ""
+        index = 0
+        while index < len(words):
+            word = words[index]
+            candidate = f"{current} {word}".strip() if current else word
+            if cell_len(candidate) <= width:
+                current = candidate
+                index += 1
+                continue
+            if not current:
+                if len(lines) == max_lines - 1:
+                    lines.append(cls._ellipsise(word, width))
+                    return "\n".join(lines)
+                cut = cls._cell_index(word, width)
+                lines.append(word[: max(1, cut)])
+                words[index] = word[max(1, cut) :]
+                continue
+            if len(lines) == max_lines - 1:
+                remaining = " ".join([current] + words[index:])
+                lines.append(cls._ellipsise(remaining, width))
+                return "\n".join(lines)
+            lines.append(current)
+            current = ""
+        if current:
+            lines.append(current)
+        return "\n".join(lines[:max_lines])
 
-    @staticmethod
-    def _append_field(text: Text, key: str, value: str, style: str = "") -> None:
-        text.append(f"  {key:<9}", style="dim")
-        text.append(value, style=style)
+    def _append_field(
+        self,
+        text: Text,
+        key: str,
+        value: str,
+        palette: Palette,
+        width: int,
+        style: str = "",
+    ) -> None:
+        prefix = f"  {key:<8}"
+        room = max(1, width - len(prefix))
+        text.append(prefix, style=palette.muted)
+        text.append(self._ellipsise(value, room), style=style)
         text.append("\n")
 
     def on_resize(self, event: events.Resize) -> None:
-        preview = self.query_one("#preview", Static)
-        preview.display = event.size.width >= PREVIEW_MIN_WIDTH
         self._frame_width = event.size.width
+        preview = self.query_one("#preview", Static)
+        preview.display = self._preview_should_display(event.size.width)
         width = event.size.width
         if width == self._last_width:
             return
         self._last_width = width
-        # Inside this handler a single-column growth can still be described by
-        # the previous layout, so paint now and once more after it settles.
         self.reflow()
         self.call_after_refresh(self.reflow)
 
     def reflow(self) -> None:
-        self.update_title()
+        if self.filtered:
+            palette = self.palette()
+            self.row_list.set_rows(
+                self.filtered,
+                self.spans,
+                self.index,
+                self.selection_style(),
+                palette=palette,
+                empty_hint=self._empty_hint(palette),
+            )
         self.update_status()
         self.update_preview()
 
@@ -957,9 +1356,9 @@ class PickerApp(App[Result | None]):
                 if counts:
                     behind, ahead = counts.split()
                     if ahead != "0":
-                        upstream += f" ↑{ahead}"
+                        upstream += f" \u2191{ahead}"
                     if behind != "0":
-                        upstream += f" ↓{behind}"
+                        upstream += f" \u2193{behind}"
                 dirty = "dirty" if _git(path, "status", "--porcelain") else "clean"
                 lines.append(f"git: {branch} ({dirty}){upstream}")
                 subject = _git(path, "log", "-1", "--pretty=%s")
@@ -993,11 +1392,8 @@ class PickerApp(App[Result | None]):
     def typed_target(self) -> str | None:
         if not self.query:
             return None
-        typed = os.path.expanduser(self.query)
-        if (self.query.startswith(("/", "~")) or not self.filtered) and os.path.isdir(
-            typed
-        ):
-            return os.path.abspath(typed)
+        if self.query.startswith(("/", "~")) or not self.filtered:
+            return resolve_typed_or_picked(self.query, "")
         return None
 
     def accept_target(self) -> str | None:
@@ -1012,26 +1408,13 @@ class PickerApp(App[Result | None]):
         target = self.accept_target()
         if target is None:
             return
-        result = Result(kind="jump", path=target, src_pane=self.src_pane)
-        if self.move_mode:
-            if not self.src_pane:
-                self.set_error("No source pane to move (HERDR_ACTIVE_PANE_ID is unset)")
-                return
-            result.kind = f"move-{self.move_mode}"
-            try:
-                layout = self.herdr.pane_layout(self.src_pane)
-            except HerdrError as error:
-                self.set_error(str(error))
-                return
-            result.src_layout = layout
-            result.src_ws = layout.get("workspace_id", "")
-            result.src_tab = layout.get("tab_id", "")
-            result.tab_label = "moved"
-            if self.move_mode == "tab":
-                try:
-                    result.tab_label = self.herdr.tab_label(result.src_tab) or "moved"
-                except HerdrError:
-                    result.tab_label = "moved"
+        try:
+            result = build_result(
+                target, self.move_mode, self.src_pane, self.herdr, None
+            )
+        except (PickerError, HerdrError) as error:
+            self.set_error(str(error))
+            return
         choice = await self.resolve_choice(target)
         if choice is CANCELLED:
             return
@@ -1047,28 +1430,7 @@ class PickerApp(App[Result | None]):
             return CANCELLED
         mapping = self.mapping_reader()
         label = workspace_label(target, self.names)
-        live = [
-            workspace
-            for workspace in workspaces
-            if workspace.get("label") == label
-        ]
-        if any(mapping.get(workspace.get("workspace_id")) == target for workspace in live):
-            return None
-        if any(
-            workspace.get("workspace_id") not in mapping
-            and any(
-                pane.get("workspace_id") == workspace.get("workspace_id")
-                and pane.get("cwd") == target
-                for pane in panes
-            )
-            for workspace in live
-        ):
-            return None
-        unknown = [
-            str(workspace.get("workspace_id"))
-            for workspace in live
-            if workspace.get("workspace_id") not in mapping
-        ]
+        unknown = unknown_workspaces(target, workspaces, panes, mapping, self.names)
         if not unknown:
             return None
         choice = await self.push_screen_wait(SelectWorkspaceModal(label, unknown))
@@ -1128,8 +1490,6 @@ class PickerApp(App[Result | None]):
         )
 
     def close_snapshot(self, path: str) -> tuple[list[str], set[tuple[str, str, str]]]:
-        """Fresh close targets; raises StateError/HerdrError instead of guessing."""
-
         workspaces = self.herdr.workspaces()
         panes = self.herdr.panes()
         mapping = self.strict_mapping_reader()
@@ -1139,8 +1499,6 @@ class PickerApp(App[Result | None]):
         return close_ids, agent_tuples
 
     def refresh_workspace_state(self) -> None:
-        """Recompute open/current status and both rankings from fresh data."""
-
         try:
             workspaces = self.herdr.workspaces()
             panes = self.herdr.panes()
@@ -1237,6 +1595,8 @@ class PickerApp(App[Result | None]):
         handler = self.KEY_INSERT.get(key) if self.mode == "insert" else None
         if handler is None and self.mode == "normal":
             handler = self.KEY_NORMAL.get(key)
+            if handler is None and event.character:
+                handler = self.KEY_NORMAL.get(event.character)
         if handler is None:
             return
         self.pending = ""
@@ -1276,6 +1636,7 @@ class PickerApp(App[Result | None]):
         "alt+p": lambda self: self.start_move("pane"),
         "alt+t": lambda self: self.start_move("tab"),
         "alt+a": lambda self: self.toggle_all(),
+        "alt+v": lambda self: self.toggle_preview(),
         "enter": lambda self: self.accept(),
     }
 
@@ -1298,6 +1659,7 @@ class PickerApp(App[Result | None]):
         "/": lambda self: self.set_mode("insert"),
         "d": lambda self: self._start_pending("d"),
         "C": lambda self: (self.clear_query(), self.set_mode("insert")),
+        "v": lambda self: self.toggle_preview(),
         "x": lambda self: self.close_current(),
         "p": lambda self: self.start_move("pane"),
         "t": lambda self: self.start_move("tab"),
@@ -1311,6 +1673,7 @@ class PickerApp(App[Result | None]):
         "alt+p": lambda self: self.start_move("pane"),
         "alt+t": lambda self: self.start_move("tab"),
         "alt+a": lambda self: self.toggle_all(),
+        "alt+v": lambda self: self.toggle_preview(),
         "enter": lambda self: self.accept(),
     }
 
@@ -1329,7 +1692,7 @@ class PickerApp(App[Result | None]):
         return (top + bottom) // 2
 
     def _half_page(self) -> int:
-        return max(1, (self.size.height - 3) // 2)
+        return max(1, (self.size.height - 4) // 2)
 
     def set_mode(self, mode: str) -> None:
         self.mode = mode
@@ -1345,5 +1708,5 @@ class PickerApp(App[Result | None]):
 
     def start_move(self, mode: str) -> None:
         self.move_mode = mode
-        self.update_title()
+        self.update_status()
         self.accept()

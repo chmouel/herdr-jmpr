@@ -8,7 +8,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from herdr_zshz.settings import Settings, SettingsError, load_settings, settings_path
+from herdr_zshz.settings import (
+    Settings,
+    SettingsError,
+    herdr_theme_name,
+    load_settings,
+    settings_path,
+)
 
 
 class SettingsTest(unittest.TestCase):
@@ -22,8 +28,44 @@ class SettingsTest(unittest.TestCase):
         self.path.write_text(text)
 
     def test_missing_file_keeps_the_built_in_default(self):
-        self.assertEqual(load_settings(self.path), Settings())
-        self.assertEqual(load_settings(self.path).start_mode, "insert")
+        loaded = load_settings(self.path)
+        self.assertEqual(loaded, Settings())
+        self.assertEqual(loaded.backend, "textual")
+        self.assertEqual(loaded.start_mode, "insert")
+        self.assertEqual(loaded.theme, "auto")
+
+    def test_backend_values_and_validation(self):
+        for backend in ("auto", "fzf", "skim", "gum", "textual"):
+            with self.subTest(backend=backend):
+                self.write(f'backend = "{backend}"\n')
+                self.assertEqual(load_settings(self.path).backend, backend)
+
+        self.write('backend = "peco"\n')
+        with self.assertRaises(SettingsError) as caught:
+            load_settings(self.path)
+        self.assertIn("backend must be one of", str(caught.exception))
+
+    def test_theme_string_and_validation(self):
+        self.write('theme = "dracula"\n')
+        self.assertEqual(load_settings(self.path).theme, "dracula")
+
+        for invalid in ('theme = ""\n', "theme = 42\n"):
+            with self.subTest(invalid=invalid):
+                self.write(invalid)
+                with self.assertRaises(SettingsError) as caught:
+                    load_settings(self.path)
+                self.assertIn("theme must be a non-empty string", str(caught.exception))
+
+    def test_herdr_theme_name_reads_herdr_config_toml(self):
+        herdr_cfg = self.root / "herdr" / "config.toml"
+        herdr_cfg.parent.mkdir(parents=True)
+        herdr_cfg.write_text('[theme]\nname = "dracula"\n')
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(self.root)}, clear=False):
+            self.assertEqual(herdr_theme_name(), "dracula")
+
+        herdr_cfg.write_text("broken = [\n")
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(self.root)}, clear=False):
+            self.assertIsNone(herdr_theme_name())
 
     def test_start_mode_normal(self):
         self.write('start_mode = "normal"\n')

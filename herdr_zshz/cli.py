@@ -14,6 +14,18 @@ from pathlib import Path
 from .config import NamesError, load_names, workspace_label
 from .frecency import current_project, open_paths, rank_paths, read_history
 from .herdr import Herdr, HerdrError, layout_ops
+from .picker import (
+    ALL_ROWS_ENV,
+    BACKEND_ENV,
+    GIT_ROWS_ENV,
+    PickerError,
+    Result,
+    resolve_backend,
+    run_fzf,
+    run_gum,
+    run_skim,
+    write_row_files,
+)
 from .settings import Settings, SettingsError, load_settings
 from .state import (
     StateError,
@@ -28,9 +40,8 @@ from .state import (
     state_file,
     write_state,
 )
-from .tui import PickerApp
 
-USAGE = "usage: herdr-zshz [--move-pane|--move-tab] [--all]"
+USAGE = "usage: herdr-zshz [--move-pane|--move-tab] [--all] [--backend <backend>]"
 PLUGIN_ID = "herdr-zshz"
 
 
@@ -114,7 +125,9 @@ def socket_path(herdr: Herdr) -> str:
     return herdr.status_socket()
 
 
-def open_picker(move_mode: str | None, show_all: bool) -> int:
+def open_picker(
+    move_mode: str | None, show_all: bool, backend_override: str | None = None
+) -> int:
     if move_mode == "pane":
         entrypoint = "move-pane"
     elif move_mode == "tab":
@@ -139,6 +152,8 @@ def open_picker(move_mode: str | None, show_all: bool) -> int:
     pane_id = active_pane_id()
     if pane_id:
         command += ["--env", f"HERDR_ACTIVE_PANE_ID={pane_id}"]
+    if backend_override:
+        command += ["--env", f"{BACKEND_ENV}={backend_override}"]
     completed = subprocess.run(
         command,
         stdin=subprocess.DEVNULL,
@@ -301,7 +316,13 @@ def jump(
     return 0
 
 
-def interactive(move_mode: str | None, show_all: bool, settings: Settings) -> int:
+def interactive(
+    move_mode: str | None,
+    show_all: bool,
+    settings: Settings,
+    backend_override: str | None = None,
+) -> int:
+    backend = resolve_backend(settings.backend, backend_override)
     names = load_names()
     herdr = Herdr()
     socket = socket_path(herdr)
@@ -321,26 +342,103 @@ def interactive(move_mode: str | None, show_all: bool, settings: Settings) -> in
     history = read_history()
     paths_git = rank_paths(history, current, opened, False)
     paths_all = rank_paths(history, current, opened, True)
-    app = PickerApp(
-        paths_git=paths_git,
-        paths_all=paths_all,
-        current=current,
-        opened=opened,
-        names=names,
-        move_mode=move_mode,
-        show_all=show_all,
-        src_pane=pane_id,
-        herdr=herdr,
-        mapping_reader=lambda: read_live_mapping(path, instance),
-        strict_mapping_reader=lambda: read_live_mapping_strict(path, instance),
-        history=history,
-        start_mode=settings.start_mode,
-    )
-    result = app.run()
+    mapping_reader = lambda: read_live_mapping(path, instance)  # noqa: E731
+
+    result: Result | None
+    if backend == "fzf":
+        result = run_fzf(
+            paths_git=paths_git,
+            paths_all=paths_all,
+            current=current,
+            opened=opened,
+            names=names,
+            move_mode=move_mode,
+            show_all=show_all,
+            src_pane=pane_id,
+            herdr=herdr,
+            mapping_reader=mapping_reader,
+        )
+    elif backend == "skim":
+        result = run_skim(
+            paths_git=paths_git,
+            paths_all=paths_all,
+            current=current,
+            opened=opened,
+            names=names,
+            move_mode=move_mode,
+            show_all=show_all,
+            src_pane=pane_id,
+            herdr=herdr,
+            mapping_reader=mapping_reader,
+            history=history,
+            close_callback=lambda target: close(target, names, herdr),
+        )
+    elif backend == "gum":
+        result = run_gum(
+            paths_git=paths_git,
+            paths_all=paths_all,
+            current=current,
+            opened=opened,
+            names=names,
+            move_mode=move_mode,
+            show_all=show_all,
+            src_pane=pane_id,
+            herdr=herdr,
+            mapping_reader=mapping_reader,
+        )
+    else:
+        from .tui import PickerApp
+
+        app = PickerApp(
+            paths_git=paths_git,
+            paths_all=paths_all,
+            current=current,
+            opened=opened,
+            names=names,
+            move_mode=move_mode,
+            show_all=show_all,
+            src_pane=pane_id,
+            herdr=herdr,
+            mapping_reader=mapping_reader,
+            strict_mapping_reader=lambda: read_live_mapping_strict(path, instance),
+            history=history,
+            start_mode=settings.start_mode,
+            theme_setting=settings.theme,
+        )
+        result = app.run()
     ignore_hangup()
     if result is None:
         return 0
     return jump(result, herdr, socket, instance, path, names)
+
+
+def _refresh_row_files(
+    herdr: Herdr, path: Path, instance: str, names: dict[str, str]
+) -> None:
+    git_env = os.environ.get(GIT_ROWS_ENV)
+    all_env = os.environ.get(ALL_ROWS_ENV)
+    if not git_env or not all_env:
+        return
+    git_file = Path(git_env)
+    all_file = Path(all_env)
+    if not git_file.parent.is_dir() or not all_file.parent.is_dir():
+        return
+    workspaces = herdr.workspaces()
+    panes = herdr.panes()
+    mapping = read_live_mapping(path, instance)
+    pane_id = active_pane_id()
+    opened = open_paths(workspaces, panes, mapping, names)
+    current = current_project(pane_id, panes, workspaces, mapping, names)
+    history = read_history()
+    write_row_files(
+        git_file,
+        all_file,
+        rank_paths(history, current, opened, False),
+        rank_paths(history, current, opened, True),
+        current,
+        opened,
+        names,
+    )
 
 
 def close(path_argument: str, names: dict[str, str], herdr: Herdr) -> int:
@@ -360,6 +458,7 @@ def close(path_argument: str, names: dict[str, str], herdr: Herdr) -> int:
         target, workspaces, panes, mapping, names
     )
     if not close_ids:
+        _refresh_row_files(herdr, path, instance, names)
         return 0
     approved_ids = set(close_ids)
     if agent_tuples and not confirm(
@@ -382,14 +481,16 @@ def close(path_argument: str, names: dict[str, str], herdr: Herdr) -> int:
         return 0
     for workspace_id in [w for w in current_ids if w in approved_ids]:
         herdr.workspace_close(workspace_id)
+    _refresh_row_files(herdr, path, instance, names)
     return 0
 
 
-def parse(argv: list[str]) -> tuple[str | None, bool, bool, str]:
+def parse(argv: list[str]) -> tuple[str | None, bool, bool, str | None, str | None]:
     move_mode: str | None = None
     show_all = False
     open_picker_mode = False
     close_path: str | None = None
+    backend_override: str | None = None
     remaining = list(argv)
     while remaining:
         argument = remaining.pop(0)
@@ -403,22 +504,39 @@ def parse(argv: list[str]) -> tuple[str | None, bool, bool, str]:
             open_picker_mode = True
         elif argument == "--close":
             close_path = remaining.pop(0) if remaining else ""
+        elif argument == "--backend":
+            if not remaining or not remaining[0].strip():
+                raise Failure(USAGE)
+            backend_override = remaining.pop(0).strip()
+        elif argument.startswith("--backend="):
+            value = argument.split("=", 1)[1].strip()
+            if not value:
+                raise Failure(USAGE)
+            backend_override = value
         else:
             raise Failure(USAGE)
-    return move_mode, show_all, open_picker_mode, close_path
+    return move_mode, show_all, open_picker_mode, close_path, backend_override
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     try:
-        move_mode, show_all, picker, close_path = parse(arguments)
-        # Fail fast on a broken config.toml, whatever the entry point.
+        move_mode, show_all, picker, close_path, backend_override = parse(arguments)
+        # Fail fast on a broken config.toml or invalid --backend, whatever the entry point.
         settings = load_settings()
+        if backend_override is not None:
+            from .settings import BACKENDS
+
+            if backend_override not in BACKENDS:
+                allowed = ", ".join(repr(item) for item in BACKENDS)
+                raise PickerError(
+                    f"Unknown backend {backend_override!r}; expected one of {allowed}"
+                )
         if picker:
-            return open_picker(move_mode, show_all)
+            return open_picker(move_mode, show_all, backend_override)
         if close_path is not None:
             return close(close_path, load_names(), Herdr())
-        return interactive(move_mode, show_all, settings)
+        return interactive(move_mode, show_all, settings, backend_override)
     except Failure as error:
         if str(error) == USAGE:
             try:
@@ -430,6 +548,8 @@ def main(argv: list[str] | None = None) -> int:
     except NamesError as error:
         return fail(str(error))
     except SettingsError as error:
+        return fail(str(error))
+    except PickerError as error:
         return fail(str(error))
     except StateError as error:
         return fail(f"Invalid workspace mapping: {error.path}")

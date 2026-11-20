@@ -231,6 +231,11 @@ class LockConcurrencyTest(unittest.TestCase):
 
 class PtyHangupTest(unittest.TestCase):
     def test_move_tab_survives_sighup_and_saves_state(self):
+        for backend in ("textual", "auto"):
+            with self.subTest(backend=backend):
+                self._run_hangup_case(backend)
+
+    def _run_hangup_case(self, backend: str):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             socket = root / "herdr.sock"
@@ -274,6 +279,7 @@ class PtyHangupTest(unittest.TestCase):
                 "XDG_STATE_HOME": str(root / "state"),
                 "HERDR_BIN_PATH": str(fake),
                 "HERDR_ACTIVE_PANE_ID": "A",
+                "HERDR_ZSHZ_BACKEND": backend,
                 "ZSHZ_DATA": str(zdata),
                 "HOME": str(root / "home"),
                 "LOG": str(log),

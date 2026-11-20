@@ -23,7 +23,7 @@ from .frecency import (
     tabs_by_path,
     workspace_worktree_path,
 )
-from .herdr import Herdr, HerdrError, layout_ops
+from .herdr import Herdr, HerdrError, move_tab_layout
 from .picker import (
     ALL_ROWS_ENV,
     BACKEND_ENV,
@@ -200,34 +200,13 @@ def move_source(result, target: str, label: str, herdr: Herdr) -> tuple[str, str
             pane = herdr.pane_move(result.src_pane, "--new-workspace", "--label", label)
         return pane.get("workspace_id", ""), pane.get("tab_id", "")
 
-    ops = layout_ops(result.src_layout or {})
-    tab_label = result.tab_label or "moved"
-    anchor = ops[0]
-    if target:
-        pane = herdr.pane_move(
-            anchor, "--new-tab", "--workspace", target, "--label", tab_label
-        )
-    else:
-        pane = herdr.pane_move(
-            anchor, "--new-workspace", "--label", label, "--tab-label", tab_label
-        )
-    moved: dict[str, str] = {anchor: pane.get("pane_id", "")}
-    new_tab = pane.get("tab_id", "")
-    for operation in ops[1:]:
-        source, target_pane, direction, ratio = operation.split("\t")
-        pane = herdr.pane_move(
-            source,
-            "--tab",
-            new_tab,
-            "--split",
-            direction,
-            "--target-pane",
-            moved[target_pane],
-            "--ratio",
-            ratio,
-        )
-        moved[source] = pane.get("pane_id", "")
-    return pane.get("workspace_id", ""), new_tab
+    return move_tab_layout(
+        herdr,
+        result.src_layout or {},
+        target,
+        label,
+        result.tab_label or "moved",
+    )
 
 
 def resolve_and_move(
@@ -491,6 +470,21 @@ def interactive(
     else:
         from .tui import PickerApp
 
+        def record_workspace(ws_id: str, target_path: str) -> None:
+            lock_path = lock_file(socket)
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX)
+                live_ids = {str(w.get("workspace_id")) for w in herdr.workspaces()}
+                live_ids.add(ws_id)
+                cur = recover(read_mapping(path), socket, instance, live_ids)
+                cur["workspaces"][ws_id] = target_path
+                write_state(path, cur)
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+                os.close(handle)
+
         app = PickerApp(
             paths_git=paths_git,
             paths_all=paths_all,
@@ -511,6 +505,7 @@ def interactive(
             agents=agents,
             tabs=tabs,
             show_tabs=show_tabs,
+            record_workspace=record_workspace,
         )
         result = app.run()
     ignore_hangup()

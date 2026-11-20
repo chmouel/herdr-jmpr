@@ -1695,6 +1695,104 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(len(app.filtered), 5)
 
+    async def test_yank_multiple_tabs_esc_clears_and_p_moves_tabs(self):
+        class MoveHerdr(FakeHerdr):
+            def __init__(self, workspaces, panes, tabs_list):
+                super().__init__(workspaces=workspaces, panes=panes)
+                self._tabs = tabs_list
+                self.moves: list[tuple[str, ...]] = []
+
+            def tabs(self):
+                return list(self._tabs)
+
+            def pane_layout(self, pane_id):
+                pane = next(p for p in self._panes if p["pane_id"] == pane_id)
+                return {
+                    "area": {"x": 0, "y": 0, "width": 100, "height": 40},
+                    "panes": [
+                        {
+                            "pane_id": pane_id,
+                            "rect": {"x": 0, "y": 0, "width": 100, "height": 40},
+                        }
+                    ],
+                    "splits": [],
+                    "tab_id": pane["tab_id"],
+                    "workspace_id": pane["workspace_id"],
+                }
+
+            def pane_move(self, *args):
+                self.moves.append(args)
+                ws_id = args[args.index("--workspace") + 1] if "--workspace" in args else "w-new"
+                return {"workspace_id": ws_id, "tab_id": f"{ws_id}:t-new", "pane_id": args[0]}
+
+        workspaces = [
+            {"workspace_id": "w1", "label": "frontend", "active_tab_id": "w1:t1"},
+            {"workspace_id": "w2", "label": "my-api", "active_tab_id": "w2:t1"},
+        ]
+        panes = [
+            {"workspace_id": "w1", "tab_id": "w1:t1", "pane_id": "w1:p1", "cwd": str(self.open_ws), "agent": "pi", "agent_status": "working"},
+            {"workspace_id": "w1", "tab_id": "w1:t2", "pane_id": "w1:p2", "cwd": str(self.open_ws), "agent": None},
+            {"workspace_id": "w2", "tab_id": "w2:t1", "pane_id": "w2:p1", "cwd": str(self.closed_sub), "agent": None},
+        ]
+        raw_tabs = [
+            {"workspace_id": "w1", "tab_id": "w1:t1", "label": "Analyze Local Changes", "number": 1, "focused": True, "agent_status": "working"},
+            {"workspace_id": "w1", "tab_id": "w1:t2", "label": "zsh", "number": 2, "focused": False, "agent_status": None},
+            {"workspace_id": "w2", "tab_id": "w2:t1", "label": "server", "number": 1, "focused": False, "agent_status": None},
+        ]
+        herdr = MoveHerdr(workspaces, panes, raw_tabs)
+        all_tabs = {
+            str(self.open_ws): self.tabs[str(self.open_ws)],
+            str(self.closed_sub): (
+                TabEntry(workspace_id="w2", tab_id="w2:t1", label="server", number=1, active=True),
+            ),
+        }
+        app = self.make_app(
+            herdr=herdr,
+            opened={str(self.open_ws), str(self.closed_sub)},
+            mapping_reader=lambda: {"w1": str(self.open_ws), "w2": str(self.closed_sub)},
+            tabs=all_tabs,
+            start_mode="normal",
+        )
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            # Yank both tabs in w1.
+            await pilot.press("j")  # w1:t1
+            await pilot.press("y")
+            await pilot.press("j")  # w1:t2
+            await pilot.press("y")
+            await pilot.pause()
+            self.assertEqual(set(app.yanked_tabs), {"w1:t1", "w1:t2"})
+            self.assertTrue(app.filtered[1].yanked)
+            self.assertTrue(app.filtered[2].yanked)
+            self.assertIn("\u2713", app.row_list._row_text(1, 90).plain)
+            self.assertIn("2 yanked", app._query_text(100).plain)
+
+            # Esc clears yanks without exiting.
+            await pilot.press("escape")
+            await pilot.pause()
+            self.assertEqual(app.yanked_tabs, {})
+            self.assertFalse(app.filtered[1].yanked)
+
+            # Yank both tabs again, move to w2:t1 tab row, and press p to paste there.
+            await pilot.press("y")  # w1:t2
+            await pilot.press("k")  # w1:t1
+            await pilot.press("y")  # w1:t1
+            await pilot.press("j", "j", "j")  # w2 -> w2:t1
+            self.assertEqual(app.filtered[app.index].tab_id, "w2:t1")
+            await pilot.press("p")
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            self.assertEqual(app.yanked_tabs, {})
+            self.assertEqual(
+                herdr.moves,
+                [
+                    ("w1:p2", "--new-tab", "--workspace", "w2", "--label", "zsh"),
+                    ("w1:p1", "--new-tab", "--workspace", "w2", "--label", "Analyze Local Changes"),
+                ],
+            )
+
     async def test_open_rated_higher_most_of_the_time_on_filter(self):
         # Closed exact basename 'api' beats weak open path match '~/.../api/frontend',
         # while open '~/.../api/frontend' still beats closed non-exact 'my-api'.

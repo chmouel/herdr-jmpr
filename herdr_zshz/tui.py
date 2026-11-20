@@ -42,7 +42,7 @@ from .frecency import (
     tabs_by_path,
     workspace_worktree_path,
 )
-from .herdr import Herdr, HerdrError
+from .herdr import Herdr, HerdrError, move_tab_layout
 from .picker import (
     PickerError,
     Result,
@@ -153,6 +153,7 @@ class Palette:
     foreground: str
     muted: str
     selection_bg: str | None
+    yank_bg: str | None = None
 
 
 @dataclass
@@ -171,6 +172,7 @@ class Row:
     tab_focused: bool = False
     tab_count: int = 0
     collapsed: bool = False
+    yanked: bool = False
 
 
 @dataclass(frozen=True)
@@ -531,8 +533,20 @@ class RowList(ScrollView, can_focus=False):
 
         if row.is_tab:
             prefix = f"  {row.tree_prefix or TREE_LAST}"
-            line.append(prefix, style=palette.muted if keep_tokens else "")
-            if row.tab_focused:
+            line.append(
+                prefix,
+                style=(
+                    f"bold {palette.warning}"
+                    if (row.yanked and keep_tokens)
+                    else palette.muted
+                    if keep_tokens
+                    else ""
+                ),
+            )
+            if row.yanked:
+                mark = "\u2713"
+                mark_style = f"bold {palette.warning}" if keep_tokens else "bold"
+            elif row.tab_focused:
                 mark = CURRENT_MARK
                 mark_style = f"bold {palette.warning}" if keep_tokens else "bold"
             elif row.tab_active:
@@ -547,7 +561,9 @@ class RowList(ScrollView, can_focus=False):
             shown = row.shown
             shown_text = Text(shown)
             if keep_tokens:
-                if selected or row.tab_focused or row.tab_active:
+                if row.yanked:
+                    base_style = f"bold {palette.warning}"
+                elif selected or row.tab_focused or row.tab_active:
                     base_style = f"bold {palette.foreground}".strip()
                 elif row.agents:
                     base_style = palette.foreground
@@ -609,9 +625,11 @@ class RowList(ScrollView, can_focus=False):
                 line.append(" " * gap)
                 line.append_text(badge_text)
             if width:
-                line.truncate(width, overflow="ellipsis", pad=selected)
+                line.truncate(width, overflow="ellipsis", pad=(selected or row.yanked))
             if selected:
                 line.stylize(self.selected_row_style)
+            elif row.yanked and palette.yank_bg:
+                line.stylize(f"on {palette.yank_bg}")
             return line
 
         if row.marker == CURRENT_MARK:
@@ -868,7 +886,7 @@ HELP_GROUPS = [
             ("v", "toggle preview"),
             ("T", "switch theme"),
             ("x", "close workspace"),
-            ("p t", "move pane / tab"),
+            ("y p", "yank / paste tab"),
             ("q", "quit"),
         ],
     ),
@@ -1091,6 +1109,7 @@ class PickerApp(App[Result | None]):
         agents: dict[str, tuple[str, ...]] | None = None,
         tabs: dict[str, tuple[TabEntry, ...]] | None = None,
         show_tabs: bool = True,
+        record_workspace: Callable[[str, str], None] | None = None,
     ) -> None:
         super().__init__()
         self._ui_mounted = False
@@ -1115,6 +1134,8 @@ class PickerApp(App[Result | None]):
         self.tabs: dict[str, tuple[TabEntry, ...]] = dict(tabs) if tabs else {}
         self.show_tabs = show_tabs
         self.collapsed_paths: set[str] = set()
+        self.yanked_tabs: dict[str, tuple[str, str, str]] = {}
+        self.record_workspace = record_workspace
         self.mode = start_mode if start_mode in ("insert", "normal") else "insert"
         self.query = ""
         self.cursor = 0
@@ -1203,6 +1224,9 @@ class PickerApp(App[Result | None]):
         selection_bg = _blend_hex(
             background or surface, primary, 0.22 if dark else 0.16
         )
+        yank_bg = _blend_hex(
+            background or surface, warning, 0.18 if dark else 0.14
+        )
         muted = _blend_hex(background or surface, foreground, 0.56) or "dim"
         return Palette(
             primary=primary if _parse_hex(primary) else "cyan",
@@ -1213,6 +1237,7 @@ class PickerApp(App[Result | None]):
             foreground=foreground if _parse_hex(foreground) else "",
             muted=muted,
             selection_bg=selection_bg,
+            yank_bg=yank_bg,
         )
 
     def selection_style(
@@ -1318,6 +1343,7 @@ class PickerApp(App[Result | None]):
                             agent_status=tab.agent_status,
                             tab_active=tab.active,
                             tab_focused=tab.focused,
+                            yanked=(tab.tab_id in self.yanked_tabs),
                         )
                     )
         return rows
@@ -1593,6 +1619,11 @@ class PickerApp(App[Result | None]):
             line.append(" normal ", style=self.chip_style("secondary"))
             line.append(" ")
 
+        if self.yanked_tabs:
+            n = len(self.yanked_tabs)
+            line.append(f" {n} yanked ", style=self.chip_style("warning"))
+            line.append(" ")
+
         prompt = f"{self.scope} \u203a "
         line.append(prompt, style=f"bold {palette.primary}")
 
@@ -1663,6 +1694,26 @@ class PickerApp(App[Result | None]):
                     ("^X", "close"),
                     ("Esc", "normal"),
                     ("?", "help"),
+                ]
+        elif self.yanked_tabs:
+            if narrow:
+                parts = [
+                    ("y", "yank"),
+                    ("p", "paste"),
+                    ("Esc", "clear"),
+                    ("j/k", "move"),
+                    ("?", "help"),
+                    ("q", "quit"),
+                ]
+            else:
+                parts = [
+                    ("y", "yank/unyank"),
+                    ("p", "paste here"),
+                    ("Esc", "clear"),
+                    ("j/k", "move"),
+                    ("\u23ce/l", "jump"),
+                    ("?", "help"),
+                    ("q", "quit"),
                 ]
         elif narrow:
             parts = [
@@ -2476,6 +2527,125 @@ class PickerApp(App[Result | None]):
                 return
             idx += step
 
+    def yank_selected(self) -> None:
+        row = self.selected_row()
+        if row is None:
+            return
+        if row.is_tab:
+            if row.tab_id in self.yanked_tabs:
+                del self.yanked_tabs[row.tab_id]
+            else:
+                self.yanked_tabs[row.tab_id] = (row.workspace_id, row.tab_id, row.shown)
+            self.set_rows()
+            return
+        tab_entries = self.tabs.get(row.path) or ()
+        if not tab_entries:
+            return
+        if all(tab.tab_id in self.yanked_tabs for tab in tab_entries):
+            for tab in tab_entries:
+                self.yanked_tabs.pop(tab.tab_id, None)
+        else:
+            for tab in tab_entries:
+                self.yanked_tabs[tab.tab_id] = (tab.workspace_id, tab.tab_id, tab.label)
+        self.set_rows()
+
+    def clear_yank(self) -> None:
+        if not self.yanked_tabs:
+            return
+        self.yanked_tabs.clear()
+        self.set_rows()
+
+    def handle_normal_escape(self) -> None:
+        if self.yanked_tabs:
+            self.clear_yank()
+        else:
+            self.exit(None)
+
+    def handle_normal_p(self) -> None:
+        if self.yanked_tabs:
+            self.paste_yanked()
+        else:
+            self.start_move("pane")
+
+    @work(exclusive=True)
+    async def paste_yanked(self) -> None:
+        if not self.yanked_tabs:
+            return
+        row = self.selected_row()
+        if row is None:
+            return
+        target_path = row.path
+        target_label = workspace_label(target_path, self.names)
+        try:
+            workspaces, panes = await self.herdr_state()
+        except HerdrError as error:
+            self.set_error(str(error))
+            return
+        mapping = self.safe_mapping()
+        live_ids = {str(w.get("workspace_id")) for w in workspaces}
+        target_ws = ""
+        if row.is_tab and row.workspace_id in live_ids:
+            target_ws = row.workspace_id
+        else:
+            normalized_target = normalize_path(target_path)
+            for workspace in workspaces:
+                ws_id = str(workspace.get("workspace_id") or "")
+                if workspace_worktree_path(workspace) == normalized_target:
+                    target_ws = ws_id
+                    break
+                if workspace.get("label") != target_label:
+                    continue
+                if mapping.get(ws_id) == target_path or (
+                    ws_id not in mapping
+                    and any(
+                        pane.get("workspace_id") == ws_id
+                        and pane.get("cwd") == target_path
+                        for pane in panes
+                    )
+                ):
+                    target_ws = ws_id
+                    break
+
+        to_move = list(self.yanked_tabs.values())
+        moved_any = False
+        try:
+            for src_ws, tab_id, tab_label in to_move:
+                if target_ws and src_ws == target_ws:
+                    continue
+                pane = next(
+                    (p for p in panes if str(p.get("tab_id") or "") == tab_id),
+                    None,
+                )
+                if pane is None or not pane.get("pane_id"):
+                    continue
+                layout = await asyncio.to_thread(
+                    self.herdr.pane_layout, str(pane["pane_id"])
+                )
+                created_ws, _ = await asyncio.to_thread(
+                    move_tab_layout,
+                    self.herdr,
+                    layout,
+                    target_ws,
+                    target_label,
+                    tab_label or "moved",
+                )
+                moved_any = True
+                if not target_ws and created_ws:
+                    target_ws = created_ws
+                    if self.record_workspace is not None:
+                        await asyncio.to_thread(
+                            self.record_workspace, target_ws, target_path
+                        )
+        except HerdrError as error:
+            self.set_error(str(error))
+            return
+        self.yanked_tabs.clear()
+        self.collapsed_paths.discard(target_path)
+        if moved_any:
+            await self.refresh_workspace_state()
+        else:
+            self.set_rows()
+
     # -- editing ----------------------------------------------------------
 
     def insert_text(self, text: str) -> None:
@@ -2629,14 +2799,15 @@ class PickerApp(App[Result | None]):
         "v": lambda self: self.toggle_preview(),
         "T": lambda self: self.open_theme_picker(),
         "x": lambda self: self.close_current(),
-        "p": lambda self: self.start_move("pane"),
+        "y": lambda self: self.yank_selected(),
+        "p": lambda self: self.handle_normal_p(),
         "t": lambda self: self.start_move("tab"),
         "o": lambda self: self.toggle_open_scope(),
         "e": lambda self: self.toggle_tabs(),
         "l": lambda self: self.accept(),
         "?": lambda self: self.show_help(),
         "q": lambda self: self.exit(None),
-        "escape": lambda self: self.exit(None),
+        "escape": lambda self: self.handle_normal_escape(),
         "ctrl+h": lambda self: self.show_help(),
         "ctrl+x": lambda self: self.close_current(),
         "alt+p": lambda self: self.start_move("pane"),

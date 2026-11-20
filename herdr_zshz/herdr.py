@@ -187,3 +187,42 @@ def layout_ops(layout: dict) -> list[str]:
 
     ops(tree)
     return lines
+
+
+def move_tab_layout(
+    herdr: Herdr,
+    layout: dict,
+    target_workspace: str,
+    workspace_label: str,
+    tab_label: str,
+) -> tuple[str, str]:
+    """Move a tab's full split layout into ``target_workspace`` (or a new workspace)."""
+
+    ops = layout_ops(layout)
+    label = tab_label or "moved"
+    anchor = ops[0]
+    if target_workspace:
+        pane = herdr.pane_move(
+            anchor, "--new-tab", "--workspace", target_workspace, "--label", label
+        )
+    else:
+        pane = herdr.pane_move(
+            anchor, "--new-workspace", "--label", workspace_label, "--tab-label", label
+        )
+    moved: dict[str, str] = {anchor: pane.get("pane_id", "")}
+    new_tab = pane.get("tab_id", "")
+    for operation in ops[1:]:
+        source, target_pane, direction, ratio = operation.split("\t")
+        pane = herdr.pane_move(
+            source,
+            "--tab",
+            new_tab,
+            "--split",
+            direction,
+            "--target-pane",
+            moved[target_pane],
+            "--ratio",
+            ratio,
+        )
+        moved[source] = pane.get("pane_id", "")
+    return pane.get("workspace_id", ""), new_tab

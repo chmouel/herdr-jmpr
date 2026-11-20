@@ -1,5 +1,5 @@
 [project]
-name = "herdr-zshz"
+name = "herdr-jmpr"
 version = "0.1.0"
 description = "Herdr plugin: jump to project workspaces ranked by zsh-z frecency"
 readme = "README.md"

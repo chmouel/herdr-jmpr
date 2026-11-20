@@ -1,4 +1,4 @@
-# herdr-zshz
+# herdr-jmpr
 
 A [Herdr](https://herdr.dev) plugin that jumps to project workspaces ranked by
 your `zsh-z` frecency history. It includes a theme-aware Textual workspace
@@ -8,14 +8,14 @@ preview) alongside `fzf`, `skim` (`sk`), and `gum` backends.
 ## Install
 
 ```sh
-git clone <this repository> ~/git/perso/herdr-zshz
-cd ~/git/perso/herdr-zshz
+git clone <this repository> ~/git/perso/herdr-jmpr
+cd ~/git/perso/herdr-jmpr
 uv sync
 herdr plugin link .
 ```
 
 The manifest declares `uv sync --frozen` as build and startup hook, so the
-plugin virtualenv is created (and refreshed) automatically. `bin/herdr-zshz`
+plugin virtualenv is created (and refreshed) automatically. `bin/herdr-jmpr`
 uses `<plugin_root>/.venv/bin/python` when present and falls back to
 `uv run --project <plugin_root>`.
 
@@ -36,8 +36,8 @@ Each action opens a popup with the picker (`placement = "popup"`, 80% x 80%).
 ## Configuration
 
 Both files live in the plugin config directory, which
-`herdr plugin config-dir herdr-zshz` prints
-(`~/.config/herdr/plugins/config/herdr-zshz` by default).
+`herdr plugin config-dir herdr-jmpr` prints
+(`~/.config/herdr/plugins/config/herdr-jmpr` by default).
 
 ### Workspace labels (`names.tsv`)
 
@@ -83,9 +83,9 @@ show_tabs = true
 ```
 
 You can also override the backend per invocation with `--backend <name>` (both
-on `herdr-zshz` and `herdr-zshz open-picker`) or via `HERDR_ZSHZ_BACKEND`, and
+on `herdr-jmpr` and `herdr-jmpr open-picker`) or via `HERDR_JMPR_BACKEND`, and
 the initial mode with `--vim` / `--normal`, `--no-vim` / `--insert`, or
-`--mode <insert|normal>` (`HERDR_ZSHZ_START_MODE`).
+`--mode <insert|normal>` (`HERDR_JMPR_START_MODE`).
 
 Unknown keys and invalid values make the plugin print `Invalid <path>: ...` and
 exit 1 rather than silently ignoring the file, so typos surface immediately.
@@ -188,7 +188,7 @@ became empty cannot abort the mapping or focus steps. Errors are appended to
 
 ## State
 
-The state directory is `${XDG_STATE_HOME:-~/.local/state}/herdr/plugins/state/herdr-zshz`
+The state directory is `${XDG_STATE_HOME:-~/.local/state}/herdr/plugins/state/herdr-jmpr`
 (or `HERDR_PLUGIN_STATE_DIR`). Each Herdr socket gets a
 `<sha256(socket path)>.json` mapping file and a `.lock` next to it.
 
@@ -203,16 +203,16 @@ make link     # herdr plugin link .
 
 Layout:
 
-- `herdr_zshz/config.py`: `names.tsv` loading and workspace labels
-- `herdr_zshz/settings.py`: `config.toml` loading, theme lookup, and defaults
-- `herdr_zshz/frecency.py`: zsh-z data parsing, ranking, and bucket ordering
-- `herdr_zshz/query.py`: fzf extended-search matcher and highlight spans
-- `herdr_zshz/state.py`: canonical/legacy state, recovery, atomic writes,
+- `herdr_jmpr/config.py`: `names.tsv` loading and workspace labels
+- `herdr_jmpr/settings.py`: `config.toml` loading, theme lookup, and defaults
+- `herdr_jmpr/frecency.py`: zsh-z data parsing, ranking, and bucket ordering
+- `herdr_jmpr/query.py`: fzf extended-search matcher and highlight spans
+- `herdr_jmpr/state.py`: canonical/legacy state, recovery, atomic writes,
   close snapshots
-- `herdr_zshz/herdr.py`: Herdr CLI wrapper and split layout reconstruction
-- `herdr_zshz/picker.py`: backend resolution and `fzf`, `skim`, and `gum` runners
-- `herdr_zshz/tui.py`: theme-aware Textual picker, modals, and preview
-- `herdr_zshz/cli.py`: flags, `open-picker`, lock transaction, and moves
+- `herdr_jmpr/herdr.py`: Herdr CLI wrapper and split layout reconstruction
+- `herdr_jmpr/picker.py`: backend resolution and `fzf`, `skim`, and `gum` runners
+- `herdr_jmpr/tui.py`: theme-aware Textual picker, modals, and preview
+- `herdr_jmpr/cli.py`: flags, `open-picker`, lock transaction, and moves
 
 ## License
 

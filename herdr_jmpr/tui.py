@@ -1027,7 +1027,7 @@ class ThemePickerModal(ModalScreen[str | None]):
 
 
 class PickerApp(App[Result | None]):
-    TITLE = "herdr-zshz"
+    TITLE = "herdr-jmpr"
 
     BINDINGS = [
         Binding("ctrl+c", "quit_now", show=False, priority=True),

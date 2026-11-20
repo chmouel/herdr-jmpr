@@ -9,9 +9,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from herdr_zshz import picker
-from herdr_zshz.frecency import TabEntry
-from herdr_zshz.herdr import Herdr
+from herdr_jmpr import picker
+from herdr_jmpr.frecency import TabEntry
+from herdr_jmpr.herdr import Herdr
 
 
 class StubHerdr(Herdr):
@@ -49,7 +49,7 @@ class StubHerdr(Herdr):
 
 class BackendResolutionTest(unittest.TestCase):
     def test_default_and_precedence_cli_over_env_over_config(self):
-        with mock.patch("herdr_zshz.picker.shutil.which", side_effect=lambda b: f"/usr/bin/{b}"):
+        with mock.patch("herdr_jmpr.picker.shutil.which", side_effect=lambda b: f"/usr/bin/{b}"):
             with mock.patch.dict(os.environ, {}, clear=False):
                 os.environ.pop(picker.BACKEND_ENV, None)
                 self.assertEqual(picker.resolve_backend(), "textual")
@@ -63,27 +63,27 @@ class BackendResolutionTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop(picker.BACKEND_ENV, None)
             with mock.patch(
-                "herdr_zshz.picker.shutil.which",
+                "herdr_jmpr.picker.shutil.which",
                 side_effect=lambda name: "/bin/fzf" if name == "fzf" else None,
             ):
                 self.assertEqual(picker.resolve_backend("auto"), "fzf")
             with mock.patch(
-                "herdr_zshz.picker.shutil.which",
+                "herdr_jmpr.picker.shutil.which",
                 side_effect=lambda name: "/bin/sk" if name == "sk" else None,
             ):
                 self.assertEqual(picker.resolve_backend("auto"), "skim")
             with mock.patch(
-                "herdr_zshz.picker.shutil.which",
+                "herdr_jmpr.picker.shutil.which",
                 side_effect=lambda name: "/bin/gum" if name == "gum" else None,
             ):
                 self.assertEqual(picker.resolve_backend("auto"), "gum")
-            with mock.patch("herdr_zshz.picker.shutil.which", return_value=None):
+            with mock.patch("herdr_jmpr.picker.shutil.which", return_value=None):
                 self.assertEqual(picker.resolve_backend("auto"), "textual")
 
     def test_explicit_missing_binary_and_unknown_backend_fail_clearly(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop(picker.BACKEND_ENV, None)
-            with mock.patch("herdr_zshz.picker.shutil.which", return_value=None):
+            with mock.patch("herdr_jmpr.picker.shutil.which", return_value=None):
                 for name, binary in (("fzf", "fzf"), ("skim", "sk"), ("gum", "gum")):
                     with self.subTest(backend=name):
                         with self.assertRaises(picker.PickerError) as caught:

@@ -1,6 +1,6 @@
 import unittest
 
-from herdr_zshz.query import match_spans, matches, parse, score_match
+from herdr_jmpr.query import match_spans, matches, parse, score_match
 
 
 class ParseTest(unittest.TestCase):

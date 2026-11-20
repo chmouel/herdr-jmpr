@@ -41,11 +41,11 @@ BACKEND_BINARIES = {
     "gum": "gum",
 }
 
-GIT_ROWS_ENV = "HERDR_ZSHZ_GIT_ROWS"
-ALL_ROWS_ENV = "HERDR_ZSHZ_ALL_ROWS"
-OPEN_ROWS_ENV = "HERDR_ZSHZ_OPEN_ROWS"
-HELP_ENV = "HERDR_ZSHZ_HELP"
-BACKEND_ENV = "HERDR_ZSHZ_BACKEND"
+GIT_ROWS_ENV = "HERDR_JMPR_GIT_ROWS"
+ALL_ROWS_ENV = "HERDR_JMPR_ALL_ROWS"
+OPEN_ROWS_ENV = "HERDR_JMPR_OPEN_ROWS"
+HELP_ENV = "HERDR_JMPR_HELP"
+BACKEND_ENV = "HERDR_JMPR_BACKEND"
 
 HELP_TEXT = (
     "enter   jump to the project (or a typed path)\n"
@@ -467,7 +467,7 @@ def _finalize_cli_selection(
 
 
 def _self_close_command() -> str:
-    return shlex.join([sys.executable, "-m", "herdr_zshz.cli", "--close"])
+    return shlex.join([sys.executable, "-m", "herdr_jmpr.cli", "--close"])
 
 
 def _child_env(extra: dict[str, str]) -> dict[str, str]:
@@ -497,7 +497,7 @@ def run_fzf(
 
     binary_path = shutil.which("fzf") or "fzf"
     visible_tabs = tabs if (show_tabs and not move_mode) else None
-    with tempfile.TemporaryDirectory(prefix="herdr-zshz-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="herdr-jmpr-") as temp_dir:
         git_file = Path(temp_dir) / "git.rows"
         all_file = Path(temp_dir) / "all.rows"
         open_file = Path(temp_dir) / "open.rows"

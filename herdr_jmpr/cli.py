@@ -1,4 +1,4 @@
-"""Command line entry point for the herdr-zshz plugin."""
+"""Command line entry point for the herdr-jmpr plugin."""
 
 from __future__ import annotations
 
@@ -53,12 +53,12 @@ from .state import (
 )
 
 USAGE = (
-    "usage: herdr-zshz [--move-pane|--move-tab] [--all] [--tabs|--no-tabs] "
+    "usage: herdr-jmpr [--move-pane|--move-tab] [--all] [--tabs|--no-tabs] "
     "[--vim|--no-vim|--normal|--insert|--mode <insert|normal>] [--backend <backend>]"
 )
-PLUGIN_ID = "herdr-zshz"
-SHOW_TABS_ENV = "HERDR_ZSHZ_SHOW_TABS"
-START_MODE_ENV = "HERDR_ZSHZ_START_MODE"
+PLUGIN_ID = "herdr-jmpr"
+SHOW_TABS_ENV = "HERDR_JMPR_SHOW_TABS"
+START_MODE_ENV = "HERDR_JMPR_START_MODE"
 
 
 class Failure(Exception):

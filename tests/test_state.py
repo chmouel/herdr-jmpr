@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from herdr_zshz.state import (
+from herdr_jmpr.state import (
     StateError,
     legacy_state_dir,
     lock_file,
@@ -50,14 +50,14 @@ class StateDirTest(unittest.TestCase):
         os.environ.pop("HERDR_PLUGIN_STATE_DIR", None)
         os.environ["XDG_STATE_HOME"] = str(self.root / "xdg")
         self.assertEqual(
-            state_dir(), self.root / "xdg" / "herdr" / "plugins" / "state" / "herdr-zshz"
+            state_dir(), self.root / "xdg" / "herdr" / "plugins" / "state" / "herdr-jmpr"
         )
 
     def test_empty_plugin_state_dir_is_ignored(self):
         os.environ["HERDR_PLUGIN_STATE_DIR"] = ""
         os.environ["XDG_STATE_HOME"] = str(self.root / "xdg")
         self.assertEqual(
-            state_dir(), self.root / "xdg" / "herdr" / "plugins" / "state" / "herdr-zshz"
+            state_dir(), self.root / "xdg" / "herdr" / "plugins" / "state" / "herdr-jmpr"
         )
 
     def test_state_and_lock_file_names(self):

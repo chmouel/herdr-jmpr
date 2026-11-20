@@ -7,7 +7,7 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "herdr-zshz"
+name = "herdr-jmpr"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

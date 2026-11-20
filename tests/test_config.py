@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from herdr_zshz.config import NamesError, load_names, names_path, normalize_path, workspace_label
+from herdr_jmpr.config import NamesError, load_names, names_path, normalize_path, workspace_label
 
 
 class NamesTest(unittest.TestCase):
@@ -52,7 +52,7 @@ class NamesTest(unittest.TestCase):
             os.environ["XDG_CONFIG_HOME"] = str(self.root / "xdg")
             self.assertEqual(
                 names_path(),
-                self.root / "xdg" / "herdr" / "plugins" / "config" / "herdr-zshz" / "names.tsv",
+                self.root / "xdg" / "herdr" / "plugins" / "config" / "herdr-jmpr" / "names.tsv",
             )
         finally:
             for key, value in (

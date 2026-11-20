@@ -1,5 +1,5 @@
-id = "herdr-zshz"
-name = "zshz"
+id = "herdr-jmpr"
+name = "jmpr"
 version = "0.1.0"
 min_herdr_version = "0.9.0"
 description = "Jump to project workspaces ranked by zsh-z frecency"
@@ -15,54 +15,54 @@ command = ["uv", "sync", "--frozen"]
 id = "jump"
 title = "Jump to project workspace…"
 contexts = ["pane", "tab", "workspace", "global"]
-command = ["bin/herdr-zshz", "open-picker"]
+command = ["bin/herdr-jmpr", "open-picker"]
 
 [[actions]]
 id = "move-pane"
 title = "Move pane to project workspace…"
 contexts = ["pane", "tab", "workspace", "global"]
-command = ["bin/herdr-zshz", "open-picker", "--move-pane"]
+command = ["bin/herdr-jmpr", "open-picker", "--move-pane"]
 
 [[actions]]
 id = "move-tab"
 title = "Move tab to project workspace…"
 contexts = ["pane", "tab", "workspace", "global"]
-command = ["bin/herdr-zshz", "open-picker", "--move-tab"]
+command = ["bin/herdr-jmpr", "open-picker", "--move-tab"]
 
 [[actions]]
 id = "jump-all"
 title = "Jump to directory (all zsh-z)…"
 contexts = ["pane", "tab", "workspace", "global"]
-command = ["bin/herdr-zshz", "open-picker", "--all"]
+command = ["bin/herdr-jmpr", "open-picker", "--all"]
 
 [[panes]]
 id = "jump"
-title = "zshz"
+title = "jmpr"
 placement = "popup"
 width = "80%"
 height = "80%"
-command = ["bin/herdr-zshz"]
+command = ["bin/herdr-jmpr"]
 
 [[panes]]
 id = "move-pane"
-title = "zshz: move pane"
+title = "jmpr: move pane"
 placement = "popup"
 width = "80%"
 height = "80%"
-command = ["bin/herdr-zshz", "--move-pane"]
+command = ["bin/herdr-jmpr", "--move-pane"]
 
 [[panes]]
 id = "move-tab"
-title = "zshz: move tab"
+title = "jmpr: move tab"
 placement = "popup"
 width = "80%"
 height = "80%"
-command = ["bin/herdr-zshz", "--move-tab"]
+command = ["bin/herdr-jmpr", "--move-tab"]
 
 [[panes]]
 id = "jump-all"
-title = "zshz: all dirs"
+title = "jmpr: all dirs"
 placement = "popup"
 width = "80%"
 height = "80%"
-command = ["bin/herdr-zshz", "--all"]
+command = ["bin/herdr-jmpr", "--all"]

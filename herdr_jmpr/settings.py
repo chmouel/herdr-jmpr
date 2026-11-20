@@ -43,7 +43,7 @@ def settings_path() -> Path:
     if config_dir:
         return Path(config_dir) / CONFIG_FILE
     base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "herdr" / "plugins" / "config" / "herdr-zshz" / CONFIG_FILE
+    return Path(base) / "herdr" / "plugins" / "config" / "herdr-jmpr" / CONFIG_FILE
 
 
 def herdr_config_path() -> Path:

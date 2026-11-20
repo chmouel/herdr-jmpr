@@ -10,11 +10,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from herdr_zshz import cli
-from herdr_zshz.config import NamesError, load_names, workspace_label
-from herdr_zshz.frecency import current_project, open_paths, rank_paths
-from herdr_zshz.state import legacy_state_dir, read_mapping, state_dir, state_file, write_state
-from herdr_zshz.tui import Result
+from herdr_jmpr import cli
+from herdr_jmpr.config import NamesError, load_names, workspace_label
+from herdr_jmpr.frecency import current_project, open_paths, rank_paths
+from herdr_jmpr.state import legacy_state_dir, read_mapping, state_dir, state_file, write_state
+from herdr_jmpr.tui import Result
 
 
 class FakeHerdr:
@@ -148,7 +148,7 @@ class CoreBehaviorTest(unittest.TestCase):
             write_state(canonical, {"instance": "old", "workspaces": {"w2": str(self.other)}})
             self.assertEqual(read_mapping(canonical)["workspaces"], {"w2": str(self.other)})
 
-        plugin_state = self.root / "state" / "herdr" / "plugins" / "state" / "herdr-zshz"
+        plugin_state = self.root / "state" / "herdr" / "plugins" / "state" / "herdr-jmpr"
         env_with_plugin = self.env | {"HERDR_PLUGIN_STATE_DIR": str(plugin_state)}
         instance = f"{os.stat(self.socket).st_dev}:{os.stat(self.socket).st_ino}"
         plugin_file = plugin_state / f"{digest}.json"
@@ -207,11 +207,11 @@ class LockConcurrencyTest(unittest.TestCase):
             (root / "home").mkdir()
 
             def worker(path: str):
-                from herdr_zshz import cli as _cli
-                from herdr_zshz.herdr import Herdr as _Herdr
-                from herdr_zshz.state import socket_instance as _instance
-                from herdr_zshz.state import state_file as _state_file
-                from herdr_zshz.tui import Result as _Result
+                from herdr_jmpr import cli as _cli
+                from herdr_jmpr.herdr import Herdr as _Herdr
+                from herdr_jmpr.state import socket_instance as _instance
+                from herdr_jmpr.state import state_file as _state_file
+                from herdr_jmpr.tui import Result as _Result
                 os.environ.update(env)
                 _cli.jump(_Result(kind="jump", path=path), _Herdr(str(fake)), str(socket), _instance(str(socket)), _state_file(str(socket)), {})
 
@@ -279,7 +279,7 @@ class PtyHangupTest(unittest.TestCase):
                 "XDG_STATE_HOME": str(root / "state"),
                 "HERDR_BIN_PATH": str(fake),
                 "HERDR_ACTIVE_PANE_ID": "A",
-                "HERDR_ZSHZ_BACKEND": backend,
+                "HERDR_JMPR_BACKEND": backend,
                 "ZSHZ_DATA": str(zdata),
                 "HOME": str(root / "home"),
                 "LOG": str(log),
@@ -288,7 +288,7 @@ class PtyHangupTest(unittest.TestCase):
             master, slave = pty.openpty()
             try:
                 proc = subprocess.Popen(
-                    [str(Path(__file__).resolve().parents[1] / "bin" / "herdr-zshz"), "--move-tab"],
+                    [str(Path(__file__).resolve().parents[1] / "bin" / "herdr-jmpr"), "--move-tab"],
                     stdin=slave,
                     stdout=slave,
                     stderr=slave,
@@ -319,7 +319,7 @@ class PtyHangupTest(unittest.TestCase):
                 if code is None:
                     proc.kill()
                     proc.wait()
-                    self.fail("herdr-zshz did not exit after accepting the move")
+                    self.fail("herdr-jmpr did not exit after accepting the move")
             finally:
                 os.close(slave)
                 os.close(master)

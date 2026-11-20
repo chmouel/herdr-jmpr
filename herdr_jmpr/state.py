@@ -25,7 +25,7 @@ def state_dir() -> Path:
     if configured:
         return Path(configured)
     base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
-    return Path(base) / "herdr" / "plugins" / "state" / "herdr-zshz"
+    return Path(base) / "herdr" / "plugins" / "state" / "herdr-jmpr"
 
 
 def legacy_state_dir() -> Path:

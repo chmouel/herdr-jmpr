@@ -6,7 +6,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 python=$root/.venv/bin/python
 
 if [ -x "$python" ]; then
-  PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" exec "$python" -m herdr_zshz.cli "$@"
+  PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" exec "$python" -m herdr_jmpr.cli "$@"
 fi
 
-exec env PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" uv run --project "$root" python -m herdr_zshz.cli "$@"
+exec env PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" uv run --project "$root" python -m herdr_jmpr.cli "$@"

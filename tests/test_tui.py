@@ -8,10 +8,10 @@ from rich.cells import cell_len
 from textual.app import App
 from textual.worker import NoActiveWorker, get_current_worker
 
-from herdr_zshz.frecency import TabEntry, agent_icon, format_agent_badges, rank_paths
-from herdr_zshz.settings import SettingsError
-from herdr_zshz.state import StateError
-from herdr_zshz.tui import (
+from herdr_jmpr.frecency import TabEntry, agent_icon, format_agent_badges, rank_paths
+from herdr_jmpr.settings import SettingsError
+from herdr_jmpr.state import StateError
+from herdr_jmpr.tui import (
     MAX_CLOSE_ROUNDS,
     CommitInfo,
     ConfirmCloseModal,

@@ -8,7 +8,7 @@ from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
 
-from herdr_zshz import cli
+from herdr_jmpr import cli
 
 
 class FakeHerdr:
@@ -114,7 +114,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(
             stderr.strip(),
-            "usage: herdr-zshz [--move-pane|--move-tab] [--all] [--tabs|--no-tabs] "
+            "usage: herdr-jmpr [--move-pane|--move-tab] [--all] [--tabs|--no-tabs] "
             "[--vim|--no-vim|--normal|--insert|--mode <insert|normal>] [--backend <backend>]",
         )
 
@@ -146,7 +146,7 @@ class CliTest(unittest.TestCase):
                     environment={"HERDR_BIN_PATH": str(fake.executable)},
                 )
                 self.assertEqual(code, 0)
-                self.assertIn(f"HERDR_ZSHZ_START_MODE={expected}", fake.calls()[-1])
+                self.assertIn(f"HERDR_JMPR_START_MODE={expected}", fake.calls()[-1])
 
     def test_backend_flag_validation_and_open_picker_forwarding(self):
         for missing_val in (["--backend"], ["--backend="]):
@@ -170,7 +170,7 @@ class CliTest(unittest.TestCase):
             },
         )
         self.assertEqual(code, 0)
-        self.assertIn("HERDR_ZSHZ_BACKEND=fzf", fake.calls()[0])
+        self.assertIn("HERDR_JMPR_BACKEND=fzf", fake.calls()[0])
 
     def test_open_picker_builds_command(self):
         fake = self.fake()
@@ -190,7 +190,7 @@ class CliTest(unittest.TestCase):
                     "pane",
                     "open",
                     "--plugin",
-                    "herdr-zshz",
+                    "herdr-jmpr",
                     "--entrypoint",
                     "move-pane",
                     "--placement",
@@ -266,8 +266,8 @@ class CliTest(unittest.TestCase):
             ["--close", str(self.target)],
             environment={
                 "HERDR_BIN_PATH": str(fake.executable),
-                "HERDR_ZSHZ_GIT_ROWS": str(git_rows),
-                "HERDR_ZSHZ_ALL_ROWS": str(all_rows),
+                "HERDR_JMPR_GIT_ROWS": str(git_rows),
+                "HERDR_JMPR_ALL_ROWS": str(all_rows),
             },
         )
         self.assertEqual(code, 0)
@@ -301,7 +301,7 @@ class CliTest(unittest.TestCase):
     def test_invalid_state_reports_mapping_error(self):
         fake = self.fake()
         state_path = (
-            self.root / "state" / "herdr" / "plugins" / "state" / "herdr-zshz"
+            self.root / "state" / "herdr" / "plugins" / "state" / "herdr-jmpr"
         )
         state_path.mkdir(parents=True)
         digest = hashlib.sha256(str(self.socket).encode()).hexdigest()
@@ -320,7 +320,7 @@ class CliTest(unittest.TestCase):
                   "cwd": str(self.target)}]
         fake = self.fake(workspaces, panes)
         state_path = (
-            self.root / "state" / "herdr" / "plugins" / "state" / "herdr-zshz"
+            self.root / "state" / "herdr" / "plugins" / "state" / "herdr-jmpr"
         )
         state_path.mkdir(parents=True)
         digest = hashlib.sha256(str(self.socket).encode()).hexdigest()
@@ -430,8 +430,8 @@ class JumpTest(unittest.TestCase):
         return FakeHerdr(self.root, workspaces or [], panes or [], layout)
 
     def run_jump(self, result, fake):
-        from herdr_zshz import state
-        from herdr_zshz.herdr import Herdr
+        from herdr_jmpr import state
+        from herdr_jmpr.herdr import Herdr
 
         with mock.patch.dict(os.environ, self.environment | {"HERDR_BIN_PATH": str(fake.executable)}):
             instance = state.socket_instance(str(self.socket))
@@ -439,12 +439,12 @@ class JumpTest(unittest.TestCase):
             return cli.jump(result, Herdr(str(fake.executable)), str(self.socket), instance, path, {})
 
     def result(self, kind="jump", **kwargs):
-        from herdr_zshz.tui import Result
+        from herdr_jmpr.tui import Result
 
         return Result(kind=kind, path=str(self.target), **kwargs)
 
     def mapping(self):
-        from herdr_zshz import state
+        from herdr_jmpr import state
 
         with mock.patch.dict(os.environ, self.environment):
             return state.read_mapping(state.state_file(str(self.socket)))["workspaces"]
@@ -463,7 +463,7 @@ class JumpTest(unittest.TestCase):
         fake = self.fake(
             workspaces=[{"workspace_id": "w1", "label": "proj", "active_tab_id": "t"}],
         )
-        from herdr_zshz import state
+        from herdr_jmpr import state
 
         with mock.patch.dict(os.environ, self.environment):
             path = state.state_file(str(self.socket))

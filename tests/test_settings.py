@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from herdr_zshz.settings import (
+from herdr_jmpr.settings import (
     Settings,
     SettingsError,
     herdr_theme_name,
@@ -124,7 +124,7 @@ class SettingsTest(unittest.TestCase):
             os.environ.pop("HERDR_PLUGIN_CONFIG_DIR", None)
             self.assertEqual(
                 settings_path(),
-                self.root / "herdr" / "plugins" / "config" / "herdr-zshz" / "config.toml",
+                self.root / "herdr" / "plugins" / "config" / "herdr-jmpr" / "config.toml",
             )
 
 

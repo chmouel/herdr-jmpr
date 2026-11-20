@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from herdr_zshz import frecency
-from herdr_zshz.frecency import (
+from herdr_jmpr import frecency
+from herdr_jmpr.frecency import (
     TabEntry,
     agent_icon,
     agents_by_path,

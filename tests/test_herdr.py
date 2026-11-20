@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from herdr_zshz.herdr import Herdr, HerdrError, layout_ops
+from herdr_jmpr.herdr import Herdr, HerdrError, layout_ops
 
 
 def layout(workspace_id, pane_ids):

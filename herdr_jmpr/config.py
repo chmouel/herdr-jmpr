@@ -25,7 +25,7 @@ def names_path() -> Path:
     if config_dir:
         return Path(config_dir) / NAMES_FILE
     base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "herdr" / "plugins" / "config" / "herdr-zshz" / NAMES_FILE
+    return Path(base) / "herdr" / "plugins" / "config" / "herdr-jmpr" / NAMES_FILE
 
 
 def load_names(path: Path | None = None) -> dict[str, str]:

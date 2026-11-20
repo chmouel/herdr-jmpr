@@ -259,6 +259,24 @@ def _parse_git_status_v2(output: str) -> dict[str, int | str] | None:
     }
 
 
+def _short_age(age: str) -> str:
+    parts = age.split()
+    if len(parts) >= 2 and parts[0].isdigit():
+        unit = parts[1].lower()
+        for prefix, short in (
+            ("second", "s"),
+            ("minute", "m"),
+            ("hour", "h"),
+            ("day", "d"),
+            ("week", "w"),
+            ("month", "mo"),
+            ("year", "y"),
+        ):
+            if unit.startswith(prefix):
+                return f"{parts[0]}{short}"
+    return age
+
+
 def _parse_git_log(output: str) -> tuple[CommitInfo, ...]:
     commits: list[CommitInfo] = []
     for line in output.splitlines():
@@ -267,7 +285,7 @@ def _parse_git_log(output: str) -> tuple[CommitInfo, ...]:
             commits.append(
                 CommitInfo(
                     short_hash=parts[0].strip(),
-                    relative_age=parts[1].strip(),
+                    relative_age=_short_age(parts[1].strip()),
                     subject=parts[2].strip(),
                 )
             )
@@ -1470,29 +1488,37 @@ class PickerApp(App[Result | None]):
                     style=f"bold {palette.success}",
                 )
             for ws in data.workspaces:
-                tabs = ", ".join(ws.tabs) if ws.tabs else "-"
+                short_tabs = [
+                    t[len(ws.workspace_id) + 1 :]
+                    if t.startswith(f"{ws.workspace_id}:")
+                    else t
+                    for t in ws.tabs
+                ]
+                tabs = ", ".join(short_tabs) if short_tabs else "-"
                 self._append_field(
                     text, "tabs", tabs, palette, width, style=palette.foreground
                 )
                 if ws.sessions:
+                    agent_width = max(len(s.agent) for s in ws.sessions)
                     for idx, session in enumerate(ws.sessions):
-                        key = "agents" if idx == 0 else ""
-                        label_part = f"{agent_icon(session.agent)} {session.agent}"
-                        if session.status and session.status != "unknown":
-                            label_part += f" ({session.status})"
-                        value = (
-                            f"{label_part}  {session.title}"
-                            if session.title
-                            else label_part
-                        )
-                        self._append_field(
-                            text,
-                            key,
-                            value,
-                            palette,
-                            width,
-                            style=f"bold {palette.warning}",
-                        )
+                        prefix = f"  {'agents' if idx == 0 else '':<8}"
+                        text.append(prefix, style=palette.muted)
+                        agent_col = f"{agent_icon(session.agent)} {session.agent:<{agent_width}}"
+                        text.append(agent_col, style=f"bold {palette.warning}")
+                        if session.status == "working":
+                            text.append(" \u25cf ", style=f"bold {palette.success}")
+                        elif session.status and session.status != "unknown":
+                            text.append(" \u25cb ", style=palette.muted)
+                        else:
+                            text.append("  ")
+                        used = len(prefix) + cell_len(agent_col) + (3 if session.status and session.status != "unknown" else 2)
+                        room = max(4, width - used)
+                        if session.title:
+                            text.append(
+                                self._ellipsise(session.title, room),
+                                style=palette.foreground,
+                            )
+                        text.append("\n")
                 elif ws.agents:
                     agent_str = ", ".join(
                         f"{agent_icon(agent)} {agent}" for agent in ws.agents
@@ -1536,7 +1562,7 @@ class PickerApp(App[Result | None]):
             for commit in git_info.commits:
                 commit_line = Text()
                 commit_line.append(commit.short_hash, style=f"bold {palette.secondary}")
-                commit_line.append(f" {commit.relative_age}  ", style=palette.muted)
+                commit_line.append(f" {commit.relative_age:<4} ", style=palette.muted)
                 room = max(4, width - cell_len(commit_line.plain))
                 commit_line.append(
                     self._ellipsise(commit.subject, room),

@@ -1165,8 +1165,8 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
                 self.repo,
                 "Current workspace (w1)",
                 "tabs    t1, t2",
-                f"agents  {agent_icon('copilot')} copilot (idle)  Fix auth bug",
-                f"{agent_icon('pi')} pi (working)  Review PR #42",
+                f"agents  {agent_icon('copilot')} copilot \u25cb Fix auth bug",
+                f"{agent_icon('pi')} pi      \u25cf Review PR #42",
                 "\u2387 main  worktree  +1 ~2 ?1  \u21911",
                 "a1b2c3d 2h ago",
                 "d4e5f6a 1d ago",
@@ -1371,8 +1371,8 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             commits,
             (
-                CommitInfo("a1b2c3d", "2 hours ago", "feat: one"),
-                CommitInfo("d4e5f6a", "1 day ago", "fix: two"),
+                CommitInfo("a1b2c3d", "2h", "feat: one"),
+                CommitInfo("d4e5f6a", "1d", "fix: two"),
             ),
         )
 

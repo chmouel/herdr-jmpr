@@ -7,10 +7,12 @@ from unittest import mock
 
 from herdr_zshz import frecency
 from herdr_zshz.frecency import (
+    agent_icon,
     agents_by_path,
     current_project,
     data_path,
     display_path,
+    format_agent_badges,
     git_root,
     open_paths,
     rank_paths,
@@ -175,6 +177,11 @@ class FrecencyTest(unittest.TestCase):
         self.assertEqual(
             result,
             {"/tmp/repo": ("codex", "copilot"), "/tmp/app": ("copilot",)},
+        )
+        self.assertEqual(format_agent_badges(("copilot",)), f"{agent_icon('copilot')} copilot")
+        self.assertEqual(
+            format_agent_badges(("claude", "copilot", "pi")),
+            f"{agent_icon('claude')} {agent_icon('copilot')} {agent_icon('pi')}",
         )
 
 

@@ -9,7 +9,7 @@ from rich.cells import cell_len
 from textual.app import App
 from textual.containers import VerticalScroll
 
-from herdr_zshz.frecency import rank_paths
+from herdr_zshz.frecency import agent_icon, format_agent_badges, rank_paths
 from herdr_zshz.settings import SettingsError
 from herdr_zshz.state import StateError
 from herdr_zshz.tui import (
@@ -526,7 +526,7 @@ class CloseTest(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(100, 24)) as pilot:
             await pilot.pause()
             rendered = str(app.row_list._build_text())
-            self.assertIn("\u26a1 copilot +1", rendered)
+            self.assertIn(format_agent_badges(("copilot", "codex")), rendered)
 
             # Toggle open-workspaces-only scope with alt+o and back
             await pilot.press("alt+o")
@@ -1151,7 +1151,7 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
                 self.repo,
                 "Current workspace (w1)",
                 "tabs    t1, t2",
-                "agents  \u26a1 copilot",
+                f"agents  {agent_icon('copilot')} copilot",
                 "\u2387 main  worktree  +1 ~2 ?1  \u21911",
                 "a1b2c3d 2h ago",
                 "d4e5f6a 1d ago",
@@ -1322,9 +1322,9 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             preview = self.text(app, "#preview")
             for needle in (
                 "tabs    t1",
-                "agents  \u26a1 copilot",
+                f"agents  {agent_icon('copilot')} copilot",
                 "tabs    t2",
-                "agents  \u26a1 codex",
+                f"agents  {agent_icon('codex')} codex",
             ):
                 self.assertIn(needle, preview)
 

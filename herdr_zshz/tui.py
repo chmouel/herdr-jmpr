@@ -23,9 +23,11 @@ from .config import workspace_label
 from .frecency import (
     CURRENT_MARK,
     OPEN_MARK,
+    agent_icon,
     agents_by_path,
     current_project,
     display_path,
+    format_agent_badges,
     open_paths,
     rank_paths,
 )
@@ -434,11 +436,7 @@ class RowList(Static):
             if width:
                 line.truncate(width, overflow="ellipsis", pad=False)
             if row.agents:
-                badge = (
-                    f"\u26a1 {row.agents[0]}"
-                    if len(row.agents) == 1
-                    else f"\u26a1 {row.agents[0]} +{len(row.agents) - 1}"
-                )
+                badge = format_agent_badges(row.agents)
                 badge_text = f"  {badge}"
                 if width:
                     room = width - cell_len(badge_text)
@@ -1468,10 +1466,13 @@ class PickerApp(App[Result | None]):
                     text, "tabs", tabs, palette, width, style=palette.foreground
                 )
                 if ws.agents:
+                    agent_str = ", ".join(
+                        f"{agent_icon(agent)} {agent}" for agent in ws.agents
+                    )
                     self._append_field(
                         text,
                         "agents",
-                        f"\u26a1 {', '.join(ws.agents)}",
+                        agent_str,
                         palette,
                         width,
                         style=f"bold {palette.warning}",

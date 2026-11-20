@@ -20,6 +20,7 @@ from .frecency import (
     agents_by_path,
     current_project,
     display_path,
+    format_agent_badges,
     open_paths,
     rank_paths,
 )
@@ -134,7 +135,7 @@ def format_ansi_row(
     if label != base:
         shown += f"  \033[2m[{label}]\033[0m"
     if agents:
-        badge = f"⚡ {agents[0]}" if len(agents) == 1 else f"⚡ {agents[0]} +{len(agents) - 1}"
+        badge = format_agent_badges(agents)
         shown += f"  \033[33m{badge}\033[0m"
     if path == current:
         prefix = f"\033[33m{CURRENT_MARK}\033[0m "

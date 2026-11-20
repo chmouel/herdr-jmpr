@@ -13,6 +13,50 @@ from .config import normalize_path, workspace_label
 CURRENT_MARK = "◆"
 OPEN_MARK = "●"
 
+AGENT_ICONS: dict[str, str] = {
+    "copilot": "\uec1e",
+    "github-copilot": "\uec1e",
+    "ghcs": "\uec1e",
+    "claude": "\u273b",
+    "claude-code": "\u273b",
+    "codex": "\U000f0626",
+    "pi": "\u03c0",
+    "gemini": "\u2726",
+    "opencode": "\U000f018d",
+    "open-code": "\U000f018d",
+    "cursor": "\U000f01c0",
+    "aider": "\U000f03ea",
+    "amp": "\u26a1",
+    "grok": "\U0001d54f",
+    "devin": "\U000f06a9",
+    "cline": "\U000f06a9",
+    "goose": "\U000f06a9",
+    "kimi": "\U000f06a9",
+    "kiro": "\U000f06a9",
+    "droid": "\U000f06a9",
+    "hermes": "\U000f06a9",
+    "kilo": "\U000f06a9",
+    "qwen": "\U000f06a9",
+}
+DEFAULT_AGENT_ICON = "\U000f06a9"
+
+
+def agent_icon(name: str) -> str:
+    """Return the icon for a Herdr agent name."""
+
+    return AGENT_ICONS.get(name.strip().lower(), DEFAULT_AGENT_ICON)
+
+
+def format_agent_badges(agents: tuple[str, ...]) -> str:
+    """Format one agent as ``<icon> <name>`` or multiple agents as space-separated icons."""
+
+    if not agents:
+        return ""
+    if len(agents) == 1:
+        name = agents[0]
+        return f"{agent_icon(name)} {name}"
+    return " ".join(agent_icon(name) for name in agents)
+
 
 def data_path() -> Path:
     configured = os.environ.get("ZSHZ_DATA") or os.environ.get("_Z_DATA")

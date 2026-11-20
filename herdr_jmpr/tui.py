@@ -173,6 +173,7 @@ class Row:
     tab_count: int = 0
     collapsed: bool = False
     yanked: bool = False
+    is_divider: bool = False
 
 
 @dataclass(frozen=True)
@@ -520,8 +521,19 @@ class RowList(ScrollView, can_focus=False):
             text.append("\n")
         return text
 
+    def _divider_text(self, width: int) -> Text:
+        palette = self.palette
+        rule = max(4, (width or 60) - len("closed") - 10)
+        line = Text("  ")
+        line.append("\u254c" * 3 + " ", style=palette.muted)
+        line.append("closed", style=f"bold {palette.secondary}".strip())
+        line.append(" " + "\u254c" * rule, style=palette.muted)
+        return line
+
     def _row_text(self, index: int, width: int) -> Text:
         palette = self.palette
+        if self.rows[index].is_divider:
+            return self._divider_text(width)
         tinted = self.selected_row_style.startswith("on ")
         row = self.rows[index]
         line = Text()
@@ -1459,6 +1471,7 @@ class PickerApp(App[Result | None]):
                 for child, child_spans in visible_children:
                     self.filtered.append(child)
                     self.spans.append(child_spans)
+        self._insert_group_dividers()
         if keep_selection and previous is not None:
             for index, row in enumerate(self.filtered):
                 if (row.path, row.tab_id) == previous:
@@ -1471,7 +1484,9 @@ class PickerApp(App[Result | None]):
                         break
                 else:
                     self.index = 0
-        self.index = max(0, min(self.index, len(self.filtered) - 1))
+        self.index = self._nearest_selectable(
+            max(0, min(self.index, len(self.filtered) - 1)), 1
+        )
         palette = self.palette()
         self.row_list.set_rows(
             self.filtered,
@@ -1489,8 +1504,41 @@ class PickerApp(App[Result | None]):
     def row_list(self) -> RowList:
         return self.query_one("#list", RowList)
 
+    def _insert_group_dividers(self) -> None:
+        """Put one divider where the live (open) rows end and closed rows begin."""
+
+        if self.scope == "open" or not any(row.path in self.opened for row in self.filtered):
+            return
+        rows: list[Row] = []
+        spans: list[list[tuple[int, int]]] = []
+        last_live: bool | None = None
+        for row, row_spans in zip(self.filtered, self.spans, strict=True):
+            if not row.is_tab:
+                live = row.path in self.opened
+                if last_live and not live:
+                    rows.append(Row(path="", shown="", marker=" ", label="", is_divider=True))
+                    spans.append([])
+                last_live = live
+            rows.append(row)
+            spans.append(row_spans)
+        self.filtered, self.spans = rows, spans
+
+    def _nearest_selectable(self, index: int, step: int) -> int:
+        """Return ``index``, or the nearest non-divider row in ``step``'s direction."""
+
+        last = len(self.filtered) - 1
+        probe = index
+        while 0 <= probe <= last and self.filtered[probe].is_divider:
+            probe += step
+        if 0 <= probe <= last:
+            return probe
+        probe = index
+        while 0 <= probe <= last and self.filtered[probe].is_divider:
+            probe -= step
+        return max(0, min(probe, last))
+
     def selected_row(self) -> Row | None:
-        if 0 <= self.index < len(self.filtered):
+        if 0 <= self.index < len(self.filtered) and not self.filtered[self.index].is_divider:
             return self.filtered[self.index]
         return None
 
@@ -1507,7 +1555,9 @@ class PickerApp(App[Result | None]):
     def set_index(self, index: int) -> None:
         if not self.filtered:
             return
-        self.index = max(0, min(index, len(self.filtered) - 1))
+        clamped = max(0, min(index, len(self.filtered) - 1))
+        step = 1 if clamped >= self.index else -1
+        self.index = self._nearest_selectable(clamped, step)
         self.row_list.set_selected(self.index)
         self.scroll_selection()
         self.show_preview()
@@ -1627,7 +1677,8 @@ class PickerApp(App[Result | None]):
         prompt = f"{self.scope} \u203a "
         line.append(prompt, style=f"bold {palette.primary}")
 
-        count_text = f"{len(self.filtered)}/{len(self.rows)}"
+        selectable = sum(1 for row in self.filtered if not row.is_divider)
+        count_text = f"{selectable}/{len(self.rows)}"
         scope_text = f"[{self.scope}]"
         right = Text()
         working = self._working_agent_count()
@@ -2454,7 +2505,7 @@ class PickerApp(App[Result | None]):
         await self.push_screen_wait(ThemePickerModal(available, self.theme))
 
     def select_row_at(self, index: int, *, activate: bool = False) -> None:
-        if not self.filtered:
+        if not 0 <= index < len(self.filtered) or self.filtered[index].is_divider:
             return
         self.set_index(index)
         if activate:
@@ -2522,7 +2573,7 @@ class PickerApp(App[Result | None]):
         step = 1 if delta > 0 else -1
         idx = self.index + step
         while 0 <= idx < len(self.filtered):
-            if not self.filtered[idx].is_tab:
+            if not self.filtered[idx].is_tab and not self.filtered[idx].is_divider:
                 self.set_index(idx)
                 return
             idx += step

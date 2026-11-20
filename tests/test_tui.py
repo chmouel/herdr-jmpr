@@ -29,6 +29,11 @@ from herdr_jmpr.tui import (
 )
 
 
+def visible(app):
+    """Rows a user can select: the filtered list without group dividers."""
+    return [row for row in app.filtered if not row.is_divider]
+
+
 def layout(workspace_id, pane_ids):
     panes, splits, x, width = [], [], 0, 100
     for index, pane_id in enumerate(pane_ids):
@@ -121,7 +126,7 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
         async with app.run_test() as pilot:
             await pilot.press("r", "e", "p", "o")
             self.assertEqual(app.query, "repo")
-            self.assertEqual([row.path for row in app.filtered], [self.repo])
+            self.assertEqual([row.path for row in visible(app)], [self.repo])
             await pilot.press("escape")
             self.assertEqual(app.mode, "normal")
             await pilot.press("g", "g")
@@ -130,7 +135,7 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.index, 0)
             await pilot.press("d", "d")
             self.assertEqual(app.query, "")
-            self.assertEqual(len(app.filtered), 2)
+            self.assertEqual(len(visible(app)), 2)
 
     async def test_start_mode_insert_is_the_default(self):
         app = self.app()
@@ -151,7 +156,7 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.mode, "insert")
             await pilot.press("r", "e", "p")
             self.assertEqual(app.query, "rep")
-            self.assertEqual([row.path for row in app.filtered], [self.repo])
+            self.assertEqual([row.path for row in visible(app)], [self.repo])
 
     async def test_enter_returns_selection(self):
         app = self.app()
@@ -535,7 +540,7 @@ class CloseTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.preview_data.label, "repo")
             app.insert_text("rep")
             await pilot.pause()
-            self.assertEqual([row.path for row in app.filtered], [self.repo])
+            self.assertEqual([row.path for row in visible(app)], [self.repo])
             self.assertEqual([w.workspace_id for w in app.preview_data.workspaces], ["w1"])
             self.assertEqual(app.preview_data.workspaces[0].tabs, ("t",))
             app.clear_query()
@@ -583,14 +588,16 @@ class CloseTest(unittest.IsolatedAsyncioTestCase):
             # Toggle open-workspaces-only scope with alt+o and back
             await pilot.press("alt+o")
             self.assertEqual(app.scope, "open")
-            self.assertEqual([row.path for row in app.filtered], [self.repo])
+            self.assertEqual([row.path for row in visible(app)], [self.repo])
             await pilot.press("alt+o")
             self.assertEqual(app.scope, "git")
-            self.assertEqual([row.path for row in app.filtered], [self.repo, closed_dir])
+            self.assertEqual([row.path for row in visible(app)], [self.repo, closed_dir])
 
-            # Single click selects row 1
+            # Row 1 is the live/closed divider; a click there selects nothing, row 2 selects the closed dir.
             await pilot.click("#list", offset=(4, 1))
-            self.assertEqual(app.index, 1)
+            self.assertEqual(app.index, 0)
+            await pilot.click("#list", offset=(4, 2))
+            self.assertEqual(app.filtered[app.index].path, closed_dir)
 
             # Theme picker modal previews live and reverts on Escape
             original_theme = app.theme
@@ -705,19 +712,19 @@ class ExtendedFilterAndModesTest(unittest.IsolatedAsyncioTestCase):
         app = self.app()
         async with app.run_test():
             app.insert_text("a | Beta")
-            self.assertEqual([row.path for row in app.filtered], [self.alpha, self.beta, self.gamma])
+            self.assertEqual([row.path for row in visible(app)], [self.alpha, self.beta, self.gamma])
             app.clear_query()
             app.insert_text("^/tmp")
-            self.assertEqual(len(app.filtered), 3)
+            self.assertEqual(len(visible(app)), 3)
             app.clear_query()
             app.insert_text("gamma$")
-            self.assertEqual([row.path for row in app.filtered], [self.gamma])
+            self.assertEqual([row.path for row in visible(app)], [self.gamma])
             app.clear_query()
             app.insert_text("!Beta")
-            self.assertEqual([row.path for row in app.filtered], [self.alpha, self.gamma])
+            self.assertEqual([row.path for row in visible(app)], [self.alpha, self.gamma])
             app.clear_query()
             app.insert_text("Beta")
-            self.assertEqual([row.path for row in app.filtered], [self.beta])
+            self.assertEqual([row.path for row in visible(app)], [self.beta])
 
     async def test_insert_mode_readline_and_tab_completion(self):
         app = self.app()
@@ -780,7 +787,7 @@ class ExtendedFilterAndModesTest(unittest.IsolatedAsyncioTestCase):
         )
         async with app.run_test():
             app.insert_text("^" + self.alpha + "$")
-            self.assertEqual([row.path for row in app.filtered], [self.alpha])
+            self.assertEqual([row.path for row in visible(app)], [self.alpha])
             app.clear_query()
             app.insert_text("^" + self.alpha + "x$")
             self.assertEqual(app.filtered, [])
@@ -788,10 +795,10 @@ class ExtendedFilterAndModesTest(unittest.IsolatedAsyncioTestCase):
             shown = next(row.shown for row in app.rows if row.path == self.beta)
             self.assertIn("[beta-label]", shown)
             app.insert_text("^" + shown + "$")
-            self.assertEqual([row.path for row in app.filtered], [self.beta])
+            self.assertEqual([row.path for row in visible(app)], [self.beta])
             app.clear_query()
             app.insert_text("[beta-label]$")
-            self.assertEqual([row.path for row in app.filtered], [self.beta])
+            self.assertEqual([row.path for row in visible(app)], [self.beta])
 
     async def test_normal_mode_navigation_and_help(self):
         app = self.app()
@@ -1574,7 +1581,7 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
         app = self.make_app()
         async with app.run_test(size=(100, 24)) as pilot:
             await pilot.pause()
-            self.assertEqual(len(app.filtered), 5)
+            self.assertEqual(len(visible(app)), 5)
             self.assertFalse(app.filtered[0].is_tab)
             self.assertTrue(app.filtered[1].is_tab)
             self.assertEqual(app.filtered[1].tree_prefix, "├─ ")
@@ -1618,7 +1625,7 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
             # Searching by agent keyword keeps only the parent workspace + matching tab with └
             app.insert_text("agent")
             await pilot.pause()
-            self.assertEqual(len(app.filtered), 2)
+            self.assertEqual(len(visible(app)), 2)
             self.assertFalse(app.filtered[0].is_tab)
             self.assertEqual(app.filtered[0].path, str(self.open_ws))
             self.assertTrue(app.filtered[1].is_tab)
@@ -1630,7 +1637,7 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(100, 24)) as pilot:
             await pilot.pause()
             # Expanded by default: no agent badge on workspace row, tabs visible.
-            self.assertEqual(len(app.filtered), 5)
+            self.assertEqual(len(visible(app)), 5)
             self.assertEqual(app.filtered[0].agents, ())
             self.assertNotIn("\u03c0", app.row_list._row_text(0, 90).plain)
 
@@ -1639,7 +1646,7 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(app.filtered[app.index].is_tab)
             await pilot.press("left")
             await pilot.pause()
-            self.assertEqual(len(app.filtered), 3)
+            self.assertEqual(len(visible(app)), 3)
             self.assertEqual(app.index, 0)
             self.assertFalse(app.filtered[0].is_tab)
             self.assertEqual(app.filtered[0].agents, ("pi",))
@@ -1650,7 +1657,7 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
             # Press right on collapsed workspace -> expands tabs and hides workspace agent badge.
             await pilot.press("right")
             await pilot.pause()
-            self.assertEqual(len(app.filtered), 5)
+            self.assertEqual(len(visible(app)), 5)
             self.assertEqual(app.filtered[0].agents, ())
             self.assertNotIn("\u03c0", app.row_list._row_text(0, 90).plain)
             self.assertTrue(app.filtered[1].is_tab)
@@ -1690,10 +1697,10 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
             # Space toggles fold in normal mode.
             await pilot.press("space")
             await pilot.pause()
-            self.assertEqual(len(app.filtered), 3)
+            self.assertEqual(len(visible(app)), 3)
             await pilot.press("space")
             await pilot.pause()
-            self.assertEqual(len(app.filtered), 5)
+            self.assertEqual(len(visible(app)), 5)
 
     async def test_yank_multiple_tabs_esc_clears_and_p_moves_tabs(self):
         class MoveHerdr(FakeHerdr):
@@ -1793,6 +1800,26 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
                 ],
             )
 
+    async def test_group_divider_separates_live_rows_and_is_skipped(self):
+        app = self.make_app()
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            dividers = [i for i, row in enumerate(app.filtered) if row.is_divider]
+            self.assertEqual(len(dividers), 1)
+            divider = dividers[0]
+            self.assertTrue(app.filtered[divider - 1].path in app.opened)
+            self.assertFalse(app.filtered[divider + 1].path in app.opened)
+            self.assertIn("closed", app.row_list._divider_text(60).plain)
+
+            app.set_index(divider - 1)
+            await pilot.press("down")
+            self.assertEqual(app.index, divider + 1)
+            await pilot.press("up")
+            self.assertEqual(app.index, divider - 1)
+
+            # The divider never counts towards the match total.
+            self.assertEqual(len(visible(app)), len(app.filtered) - 1)
+
     async def test_open_rated_higher_most_of_the_time_on_filter(self):
         # Closed exact basename 'api' beats weak open path match '~/.../api/frontend',
         # while open '~/.../api/frontend' still beats closed non-exact 'my-api'.
@@ -1802,7 +1829,7 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
             app.insert_text("api")
             await pilot.pause()
             self.assertEqual(
-                [row.path for row in app.filtered],
+                [row.path for row in visible(app)],
                 [str(self.closed_exact), str(self.open_ws), str(self.closed_sub)],
             )
 

@@ -149,6 +149,42 @@ class Row:
     label: str
 
 
+@dataclass(frozen=True)
+class CommitInfo:
+    short_hash: str
+    relative_age: str
+    subject: str
+
+
+@dataclass(frozen=True)
+class GitInfo:
+    branch: str
+    staged: int = 0
+    modified: int = 0
+    untracked: int = 0
+    ahead: int = 0
+    behind: int = 0
+    is_worktree: bool = False
+    commits: tuple[CommitInfo, ...] = ()
+
+
+@dataclass(frozen=True)
+class WorkspaceInfo:
+    workspace_id: str
+    tabs: tuple[str, ...] = ()
+    agents: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PreviewData:
+    path: str
+    label: str
+    loading: bool = False
+    no_match: bool = False
+    workspaces: tuple[WorkspaceInfo, ...] = ()
+    git: GitInfo | None = None
+
+
 def _git(path: str, *args: str) -> str:
     try:
         completed = subprocess.run(
@@ -161,6 +197,89 @@ def _git(path: str, *args: str) -> str:
     except (OSError, subprocess.SubprocessError):
         return ""
     return completed.stdout.strip() if completed.returncode == 0 else ""
+
+
+def _parse_git_status_v2(output: str) -> dict[str, int | str] | None:
+    if not output:
+        return None
+    branch = ""
+    ahead = 0
+    behind = 0
+    staged = 0
+    modified = 0
+    untracked = 0
+    for line in output.splitlines():
+        if line.startswith("# branch.head "):
+            branch = line[len("# branch.head ") :].strip()
+        elif line.startswith("# branch.ab "):
+            for token in line[len("# branch.ab ") :].split():
+                if token.startswith("+"):
+                    try:
+                        ahead = int(token[1:])
+                    except ValueError:
+                        pass
+                elif token.startswith("-"):
+                    try:
+                        behind = int(token[1:])
+                    except ValueError:
+                        pass
+        elif line.startswith(("1 ", "2 ")):
+            fields = line.split(" ", 2)
+            if len(fields) >= 2 and len(fields[1]) >= 2:
+                xy = fields[1]
+                if xy[0] != ".":
+                    staged += 1
+                if xy[1] != ".":
+                    modified += 1
+        elif line.startswith("u "):
+            modified += 1
+        elif line.startswith("? "):
+            untracked += 1
+    if not branch:
+        return None
+    return {
+        "branch": branch,
+        "ahead": ahead,
+        "behind": behind,
+        "staged": staged,
+        "modified": modified,
+        "untracked": untracked,
+    }
+
+
+def _parse_git_log(output: str) -> tuple[CommitInfo, ...]:
+    commits: list[CommitInfo] = []
+    for line in output.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) == 3 and parts[0]:
+            commits.append(
+                CommitInfo(
+                    short_hash=parts[0].strip(),
+                    relative_age=parts[1].strip(),
+                    subject=parts[2].strip(),
+                )
+            )
+    return tuple(commits[:3])
+
+
+def _load_git_info(path: str) -> GitInfo | None:
+    if not os.path.isdir(path):
+        return None
+    status_out = _git(path, "status", "--porcelain=v2", "--branch")
+    parsed = _parse_git_status_v2(status_out)
+    if parsed is None:
+        return None
+    log_out = _git(path, "log", "-n", "3", "--pretty=format:%h%x09%cr%x09%s")
+    return GitInfo(
+        branch=str(parsed["branch"]),
+        staged=int(parsed["staged"]),
+        modified=int(parsed["modified"]),
+        untracked=int(parsed["untracked"]),
+        ahead=int(parsed["ahead"]),
+        behind=int(parsed["behind"]),
+        is_worktree=os.path.isfile(os.path.join(path, ".git")),
+        commits=_parse_git_log(log_out),
+    )
 
 
 class Bar(Static):
@@ -612,6 +731,8 @@ class PickerApp(App[Result | None]):
         history: list[str] | None = None,
         start_mode: str = "insert",
         theme_setting: str = "auto",
+        workspaces: list[dict] | None = None,
+        panes: list[dict] | None = None,
     ) -> None:
         super().__init__()
         self._ui_mounted = False
@@ -637,11 +758,14 @@ class PickerApp(App[Result | None]):
         self.filtered: list[Row] = []
         self.spans: list[list[tuple[int, int]]] = []
         self.index = 0
-        self.preview_lines: list[str] = []
+        self.preview_data: PreviewData | None = None
         self.preview_override: bool | None = None
         self._preview_path = ""
-        self._preview_cache: dict[str, list[str]] = {}
+        self._preview_cache: dict[str, PreviewData] = {}
         self._preview_generation = 0
+        self._preview_timer = None
+        self._snapshot_workspaces = workspaces
+        self._snapshot_panes = panes
         self._last_width = 0
         self._frame_width = 0
         self.theme = self._resolve_theme(theme_setting)
@@ -1071,6 +1195,24 @@ class PickerApp(App[Result | None]):
         self.update_preview()
         self.call_after_refresh(self.reflow)
 
+    def _cancel_preview_timer(self) -> None:
+        if self._preview_timer is not None:
+            self._preview_timer.stop()
+            self._preview_timer = None
+
+    def _schedule_preview_load(self, path: str) -> None:
+        self._cancel_preview_timer()
+        generation = self._preview_generation
+        self._preview_timer = self.set_timer(
+            0.06, lambda: self._fire_preview_load(path, generation)
+        )
+
+    def _fire_preview_load(self, path: str, generation: int) -> None:
+        self._preview_timer = None
+        if generation != self._preview_generation or path != self._preview_path:
+            return
+        self.load_preview(path)
+
     def show_preview(self) -> None:
         row = self.selected_row()
         if row is None:
@@ -1079,32 +1221,38 @@ class PickerApp(App[Result | None]):
                 self._preview_path = typed
                 cached = self._preview_cache.get(typed)
                 if cached is not None:
-                    self.preview_lines = cached
+                    self._cancel_preview_timer()
+                    self.preview_data = cached
                     self.update_preview()
                     return
                 label = workspace_label(typed, self.names)
-                self.preview_lines = [typed, f"label: {label}"]
+                self.preview_data = PreviewData(path=typed, label=label, loading=True)
                 self.update_preview()
-                self.load_preview(typed)
+                self._schedule_preview_load(typed)
                 return
+            self._cancel_preview_timer()
             self._preview_path = ""
-            self.preview_lines = ["(no match)"]
+            self.preview_data = PreviewData(path="", label="", no_match=True)
             self.update_preview()
             return
         self._preview_path = row.path
         cached = self._preview_cache.get(row.path)
         if cached is not None:
-            self.preview_lines = cached
+            self._cancel_preview_timer()
+            self.preview_data = cached
             self.update_preview()
             return
-        self.preview_lines = [row.path, f"label: {row.label}"]
+        self.preview_data = PreviewData(path=row.path, label=row.label, loading=True)
         self.update_preview()
-        self.load_preview(row.path)
+        self._schedule_preview_load(row.path)
 
     def invalidate_previews(self) -> None:
+        self._cancel_preview_timer()
         self._preview_cache.clear()
         self._preview_path = ""
         self._preview_generation += 1
+        self._snapshot_workspaces = None
+        self._snapshot_panes = None
 
     def update_preview(self) -> None:
         preview = self.query_one("#preview", Static)
@@ -1115,13 +1263,12 @@ class PickerApp(App[Result | None]):
 
     def _preview_text(self) -> Text:
         palette = self.palette()
-        lines = self.preview_lines
+        data = self.preview_data
         text = Text()
-        if not lines:
+        if data is None:
             return text
-        path = lines[0]
         width = max(12, self._content_width("#preview"))
-        if path == "(no match)":
+        if data.no_match:
             text.append("No matching workspace\n", style=f"bold {palette.foreground}".strip())
             text.append(
                 "Press Alt+A to search all directories, or type a directory path to open it directly.",
@@ -1129,23 +1276,8 @@ class PickerApp(App[Result | None]):
             )
             return text
 
-        label = ""
-        open_line: str | None = None
-        details: list[str] = []
-        git_line: str | None = None
-        last_line: str | None = None
-        for line in lines[1:]:
-            if line.startswith("label: "):
-                label = line[len("label: ") :]
-            elif line.startswith("open: "):
-                open_line = line[len("open: ") :]
-            elif line.strip().startswith("tabs:"):
-                details.append(line.strip())
-            elif line.startswith("git: "):
-                git_line = line[len("git: ") :]
-            elif line.startswith("last: "):
-                last_line = line[len("last: ") :]
-
+        path = data.path
+        label = data.label
         basename = os.path.basename(path.rstrip("/")) or path
         title = Text()
         title.append(basename, style=f"bold {palette.foreground}".strip() or "bold")
@@ -1158,9 +1290,9 @@ class PickerApp(App[Result | None]):
         text.append(self._ellipsise(display_path(path), width), style=palette.muted)
         text.append("\n\n")
 
-        if open_line is None:
+        if data.loading:
             text.append("\u25cc  Checking workspace\u2026\n", style=palette.muted)
-        elif open_line == "no":
+        elif not data.workspaces:
             if self.selected_row() is None and self.typed_target() == path:
                 text.append(
                     "\u23ce  Press Enter to open new workspace\n",
@@ -1169,61 +1301,71 @@ class PickerApp(App[Result | None]):
             else:
                 text.append("\u25cb  Closed\n", style=palette.muted)
         else:
+            open_ids = ", ".join(ws.workspace_id for ws in data.workspaces)
             if path == self.current:
                 text.append(
-                    f"\u25c6  Current workspace ({open_line})\n",
+                    f"\u25c6  Current workspace ({open_ids})\n",
                     style=f"bold {palette.warning}",
                 )
             else:
                 text.append(
-                    f"\u25cf  Open ({open_line})\n",
+                    f"\u25cf  Open ({open_ids})\n",
                     style=f"bold {palette.success}",
                 )
-            if not details:
-                self._append_field(text, "tabs", "-", palette, width)
-            for detail in details:
-                body = detail[len("tabs:") :].strip()
-                if "agents:" in body:
-                    tabs, _, agents = body.partition("agents:")
-                    tabs, agents = tabs.strip(" ,"), agents.strip()
-                else:
-                    tabs, agents = body, ""
+            for ws in data.workspaces:
+                tabs = ", ".join(ws.tabs) if ws.tabs else "-"
                 self._append_field(
-                    text, "tabs", tabs or "-", palette, width, style=palette.foreground
+                    text, "tabs", tabs, palette, width, style=palette.foreground
                 )
-                if agents:
+                if ws.agents:
                     self._append_field(
                         text,
                         "agents",
-                        f"\u26a1 {agents}",
+                        f"\u26a1 {', '.join(ws.agents)}",
                         palette,
                         width,
                         style=f"bold {palette.warning}",
                     )
 
-        if git_line:
+        git_info = data.git
+        if git_info is not None:
             text.append("\n")
-            branch, _, rest = git_line.partition(" (")
-            state, _, tail = rest.partition(")")
             git_header = Text()
-            git_header.append(f"\u2387 {branch}", style=f"bold {palette.primary}")
-            if state:
+            git_header.append(f"\u2387 {git_info.branch}", style=f"bold {palette.primary}")
+            if git_info.is_worktree:
                 git_header.append("  ")
-                state_style = (
-                    f"bold {palette.warning}"
-                    if state.startswith("dirty")
-                    else palette.success
-                )
-                git_header.append(state, style=state_style)
-            if tail.strip():
-                git_header.append("  ")
-                git_header.append(tail.strip(), style=f"bold {palette.secondary}")
+                git_header.append("worktree", style=palette.muted)
+            counts: list[str] = []
+            if git_info.staged:
+                counts.append(f"+{git_info.staged}")
+            if git_info.modified:
+                counts.append(f"~{git_info.modified}")
+            if git_info.untracked:
+                counts.append(f"?{git_info.untracked}")
+            git_header.append("  ")
+            if counts:
+                git_header.append(" ".join(counts), style=f"bold {palette.warning}")
+            else:
+                git_header.append("clean", style=palette.success)
+            if git_info.ahead:
+                git_header.append(f"  \u2191{git_info.ahead}", style=f"bold {palette.secondary}")
+            if git_info.behind:
+                git_header.append(f"  \u2193{git_info.behind}", style=f"bold {palette.secondary}")
             git_header.truncate(width, overflow="ellipsis")
             text.append_text(git_header)
             text.append("\n")
-            if last_line:
-                wrapped = self._wrap_subject(last_line, width, max_lines=3)
-                text.append(wrapped, style=f"italic {palette.muted}")
+            for commit in git_info.commits:
+                commit_line = Text()
+                commit_line.append(commit.short_hash, style=f"bold {palette.secondary}")
+                commit_line.append(f" {commit.relative_age}  ", style=palette.muted)
+                room = max(4, width - cell_len(commit_line.plain))
+                commit_line.append(
+                    self._ellipsise(commit.subject, room),
+                    style=f"italic {palette.foreground}".strip(),
+                )
+                commit_line.truncate(width, overflow="ellipsis")
+                text.append_text(commit_line)
+                text.append("\n")
         return text
 
     @classmethod
@@ -1300,19 +1442,21 @@ class PickerApp(App[Result | None]):
         self.update_status()
         self.update_preview()
 
-    @work(exclusive=True, thread=True)
+    @work(exclusive=True, thread=True, group="preview")
     def load_preview(self, path: str) -> None:
         generation = self._preview_generation
-        try:
-            workspaces = self.herdr.workspaces()
-            panes = self.herdr.panes()
-        except HerdrError:
-            workspaces, panes = [], []
+        workspaces = self._snapshot_workspaces
+        panes = self._snapshot_panes
+        if workspaces is None or panes is None:
+            try:
+                workspaces = self.herdr.workspaces()
+                panes = self.herdr.panes()
+            except HerdrError:
+                workspaces, panes = [], []
         mapping = self.safe_mapping()
         label = workspace_label(path, self.names)
-        lines = [path, f"label: {label}"]
         open_ids = [
-            workspace.get("workspace_id")
+            str(workspace.get("workspace_id"))
             for workspace in workspaces
             if workspace.get("label") == label
             and (
@@ -1324,17 +1468,19 @@ class PickerApp(App[Result | None]):
                 )
             )
         ]
-        if open_ids:
-            lines.append("open: " + ", ".join(str(workspace_id) for workspace_id in open_ids))
-            for workspace_id in open_ids:
-                tabs = sorted(
+        ws_infos: list[WorkspaceInfo] = []
+        for workspace_id in open_ids:
+            tabs = tuple(
+                sorted(
                     {
                         str(pane.get("tab_id"))
                         for pane in panes
                         if pane.get("workspace_id") == workspace_id
                     }
                 )
-                agents = sorted(
+            )
+            agents = tuple(
+                sorted(
                     {
                         str(pane.get("agent"))
                         for pane in panes
@@ -1342,40 +1488,26 @@ class PickerApp(App[Result | None]):
                         and pane.get("agent") is not None
                     }
                 )
-                detail = f"  tabs: {', '.join(tabs) or '-'}"
-                if agents:
-                    detail += f"  agents: {', '.join(agents)}"
-                lines.append(detail)
-        else:
-            lines.append("open: no")
-        if os.path.isdir(path):
-            branch = _git(path, "rev-parse", "--abbrev-ref", "HEAD")
-            if branch:
-                counts = _git(path, "rev-list", "--left-right", "--count", "@{u}...HEAD")
-                upstream = ""
-                if counts:
-                    behind, ahead = counts.split()
-                    if ahead != "0":
-                        upstream += f" \u2191{ahead}"
-                    if behind != "0":
-                        upstream += f" \u2193{behind}"
-                dirty = "dirty" if _git(path, "status", "--porcelain") else "clean"
-                lines.append(f"git: {branch} ({dirty}){upstream}")
-                subject = _git(path, "log", "-1", "--pretty=%s")
-                if subject:
-                    lines.append(f"last: {subject}")
+            )
+            ws_infos.append(WorkspaceInfo(workspace_id=workspace_id, tabs=tabs, agents=agents))
+        data = PreviewData(
+            path=path,
+            label=label,
+            workspaces=tuple(ws_infos),
+            git=_load_git_info(path),
+        )
         try:
-            self.call_from_thread(self._preview_loaded, path, lines, generation)
+            self.call_from_thread(self._preview_loaded, path, data, generation)
         except Exception:  # noqa: BLE001 - app may have exited already
             pass
 
-    def _preview_loaded(self, path: str, lines: list[str], generation: int) -> None:
+    def _preview_loaded(self, path: str, data: PreviewData, generation: int) -> None:
         if generation != self._preview_generation:
             return
-        self._preview_cache[path] = lines
+        self._preview_cache[path] = data
         if path != self._preview_path:
             return
-        self.preview_lines = lines
+        self.preview_data = data
         self.update_preview()
 
     def safe_mapping(self) -> dict[str, str]:

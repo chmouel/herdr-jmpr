@@ -411,6 +411,8 @@ def interactive(
             history=history,
             start_mode=settings.start_mode,
             theme_setting=settings.theme,
+            workspaces=workspaces,
+            panes=panes,
         )
         result = app.run()
     ignore_hangup()

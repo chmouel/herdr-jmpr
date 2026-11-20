@@ -14,10 +14,16 @@ from herdr_zshz.settings import SettingsError
 from herdr_zshz.state import StateError
 from herdr_zshz.tui import (
     MAX_CLOSE_ROUNDS,
+    CommitInfo,
     ConfirmCloseModal,
+    GitInfo,
     HelpModal,
     PickerApp,
+    PreviewData,
     SelectWorkspaceModal,
+    WorkspaceInfo,
+    _parse_git_log,
+    _parse_git_status_v2,
 )
 
 
@@ -362,7 +368,8 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             preview = app.query_one("#preview")
             self.assertTrue(preview.display)
-            self.assertIn(self.repo, "\n".join(app.preview_lines))
+            self.assertIsNotNone(app.preview_data)
+            self.assertEqual(app.preview_data.path, self.repo)
 
 
 class CloseTest(unittest.IsolatedAsyncioTestCase):
@@ -459,9 +466,9 @@ class CloseTest(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(herdr.closed, ["w1"])
 
-    async def wait_for_preview(self, app, pilot, prefix):
+    async def wait_for_preview(self, app, pilot):
         for _ in range(200):
-            if any(line.startswith(prefix) for line in app.preview_lines):
+            if app.preview_data is not None and not app.preview_data.loading:
                 return True
             await pilot.pause(0.02)
         return False
@@ -473,31 +480,33 @@ class CloseTest(unittest.IsolatedAsyncioTestCase):
         )
         app = self.app(herdr)
         async with app.run_test(size=(120, 40)) as pilot:
-            self.assertTrue(await self.wait_for_preview(app, pilot, "open:"))
-            self.assertIn("open: w1", app.preview_lines)
-            self.assertIn("label: repo", app.preview_lines)
+            self.assertTrue(await self.wait_for_preview(app, pilot))
+            self.assertEqual([w.workspace_id for w in app.preview_data.workspaces], ["w1"])
+            self.assertEqual(app.preview_data.label, "repo")
             app.insert_text("rep")
             await pilot.pause()
             self.assertEqual([row.path for row in app.filtered], [self.repo])
-            self.assertIn("open: w1", app.preview_lines)
-            self.assertTrue(any("tabs:" in line for line in app.preview_lines))
+            self.assertEqual([w.workspace_id for w in app.preview_data.workspaces], ["w1"])
+            self.assertEqual(app.preview_data.workspaces[0].tabs, ("t",))
             app.clear_query()
             await pilot.pause()
-            self.assertIn("open: w1", app.preview_lines)
+            self.assertEqual([w.workspace_id for w in app.preview_data.workspaces], ["w1"])
 
     async def test_preview_from_before_invalidation_is_not_cached(self):
         herdr = FakeHerdr(workspaces=[], panes=[])
         app = self.app(herdr)
         async with app.run_test(size=(120, 40)) as pilot:
-            self.assertTrue(await self.wait_for_preview(app, pilot, "open: no"))
+            self.assertTrue(await self.wait_for_preview(app, pilot))
             app.invalidate_previews()
             stale_generation = app._preview_generation - 1
-            app._preview_loaded(self.repo, ["stale"], stale_generation)
+            stale_data = PreviewData(path=self.repo, label="stale")
+            fresh_data = PreviewData(path=self.repo, label="fresh")
+            app._preview_loaded(self.repo, stale_data, stale_generation)
             await pilot.pause()
             self.assertNotIn(self.repo, app._preview_cache)
-            app._preview_loaded(self.repo, ["fresh"], app._preview_generation)
+            app._preview_loaded(self.repo, fresh_data, app._preview_generation)
             await pilot.pause()
-            self.assertEqual(app._preview_cache[self.repo], ["fresh"])
+            self.assertEqual(app._preview_cache[self.repo], fresh_data)
 
 
 class ChoiceTest(unittest.IsolatedAsyncioTestCase):
@@ -1068,14 +1077,23 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
         app = self.app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            app.preview_lines = [
-                self.repo,
-                "label: repo",
-                "open: w1",
-                "  tabs: t1, t2  agents: copilot",
-                "git: main (dirty) \u21911",
-                "last: feat: add vim normal mode " + "x" * 200,
-            ]
+            app.preview_data = PreviewData(
+                path=self.repo,
+                label="repo",
+                workspaces=(WorkspaceInfo("w1", tabs=("t1", "t2"), agents=("copilot",)),),
+                git=GitInfo(
+                    branch="main",
+                    staged=1,
+                    modified=2,
+                    untracked=1,
+                    ahead=1,
+                    is_worktree=True,
+                    commits=(
+                        CommitInfo("a1b2c3d", "2h ago", "feat: add vim normal mode " + "x" * 200),
+                        CommitInfo("d4e5f6a", "1d ago", "fix: layout"),
+                    ),
+                ),
+            )
             app.update_preview()
             preview = self.text(app, "#preview")
             for needle in (
@@ -1084,13 +1102,14 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
                 "Current workspace (w1)",
                 "tabs    t1, t2",
                 "agents  \u26a1 copilot",
-                "\u2387 main  dirty  \u21911",
-                "feat: add vim normal mode",
+                "\u2387 main  worktree  +1 ~2 ?1  \u21911",
+                "a1b2c3d 2h ago",
+                "d4e5f6a 1d ago",
                 "\u2026",
             ):
                 self.assertIn(needle, preview)
 
-            app.preview_lines = [self.repo, "label: repo"]
+            app.preview_data = PreviewData(path=self.repo, label="repo", loading=True)
             app.update_preview()
             preview = self.text(app, "#preview")
             self.assertIn("Checking workspace\u2026", preview)
@@ -1241,13 +1260,14 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
         app = self.app()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            app.preview_lines = [
-                self.repo,
-                "label: repo",
-                "open: w1, w2",
-                "  tabs: t1  agents: copilot",
-                "  tabs: t2  agents: codex",
-            ]
+            app.preview_data = PreviewData(
+                path=self.repo,
+                label="repo",
+                workspaces=(
+                    WorkspaceInfo("w1", tabs=("t1",), agents=("copilot",)),
+                    WorkspaceInfo("w2", tabs=("t2",), agents=("codex",)),
+                ),
+            )
             app.update_preview()
             preview = self.text(app, "#preview")
             for needle in (
@@ -1257,6 +1277,39 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
                 "agents  \u26a1 codex",
             ):
                 self.assertIn(needle, preview)
+
+    def test_git_status_v2_and_log_parsing(self):
+        status = "\n".join(
+            [
+                "# branch.oid abc123",
+                "# branch.head feat/preview",
+                "# branch.ab +2 -1",
+                "1 M. N... 100644 100644 100644 abc def file_a.py",
+                "1 .M N... 100644 100644 100644 abc def file_b.py",
+                "1 MM N... 100644 100644 100644 abc def file_c.py",
+                "? untracked.txt",
+            ]
+        )
+        parsed = _parse_git_status_v2(status)
+        self.assertEqual(
+            parsed,
+            {
+                "branch": "feat/preview",
+                "ahead": 2,
+                "behind": 1,
+                "staged": 2,
+                "modified": 2,
+                "untracked": 1,
+            },
+        )
+        commits = _parse_git_log("a1b2c3d\t2 hours ago\tfeat: one\nd4e5f6a\t1 day ago\tfix: two\n")
+        self.assertEqual(
+            commits,
+            (
+                CommitInfo("a1b2c3d", "2 hours ago", "feat: one"),
+                CommitInfo("d4e5f6a", "1 day ago", "fix: two"),
+            ),
+        )
 
     async def test_help_fits_a_small_terminal(self):
         app = self.app()

@@ -83,7 +83,9 @@ show_tabs = true
 ```
 
 You can also override the backend per invocation with `--backend <name>` (both
-on `herdr-zshz` and `herdr-zshz open-picker`) or via `HERDR_ZSHZ_BACKEND`.
+on `herdr-zshz` and `herdr-zshz open-picker`) or via `HERDR_ZSHZ_BACKEND`, and
+the initial mode with `--vim` / `--normal`, `--no-vim` / `--insert`, or
+`--mode <insert|normal>` (`HERDR_ZSHZ_START_MODE`).
 
 Unknown keys and invalid values make the plugin print `Invalid <path>: ...` and
 exit 1 rather than silently ignoring the file, so typos surface immediately.

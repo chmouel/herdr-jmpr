@@ -114,8 +114,41 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(
             stderr.strip(),
-            "usage: herdr-zshz [--move-pane|--move-tab] [--all] [--tabs|--no-tabs] [--backend <backend>]",
+            "usage: herdr-zshz [--move-pane|--move-tab] [--all] [--tabs|--no-tabs] "
+            "[--vim|--no-vim|--normal|--insert|--mode <insert|normal>] [--backend <backend>]",
         )
+
+    def test_start_mode_flags_validation_and_open_picker_forwarding(self):
+        for missing_val in (["--mode"], ["--mode="]):
+            with self.subTest(missing_val=missing_val):
+                code, stderr = self.run_cli(missing_val)
+                self.assertEqual(code, 2)
+                self.assertIn("--mode", stderr)
+
+        for unknown in (["--mode", "emacs"], ["--mode=emacs"]):
+            with self.subTest(unknown=unknown):
+                code, stderr = self.run_cli(unknown)
+                self.assertEqual(code, 1)
+                self.assertIn("emacs", stderr)
+
+        for flag, expected in (
+            (["--vim"], "normal"),
+            (["--normal"], "normal"),
+            (["--no-vim"], "insert"),
+            (["--insert"], "insert"),
+            (["--mode", "normal"], "normal"),
+            (["--mode=insert"], "insert"),
+        ):
+            with self.subTest(flag=flag):
+                fake = self.fake()
+                code, _ = self.run_cli(
+                    ["open-picker", *flag],
+                    environment={"HERDR_BIN_PATH": str(fake.executable)},
+                )
+                self.assertEqual(code, 0)
+                calls = fake.calls()
+                self.assertEqual(len(calls), 1)
+                self.assertIn(f"HERDR_ZSHZ_START_MODE={expected}", calls[0])
 
     def test_backend_flag_validation_and_open_picker_forwarding(self):
         for missing_val in (["--backend"], ["--backend="]):

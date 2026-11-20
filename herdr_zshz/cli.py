@@ -37,7 +37,7 @@ from .picker import (
     run_skim,
     write_row_files,
 )
-from .settings import Settings, SettingsError, load_settings
+from .settings import START_MODES, Settings, SettingsError, load_settings
 from .state import (
     StateError,
     lock_file,
@@ -53,10 +53,12 @@ from .state import (
 )
 
 USAGE = (
-    "usage: herdr-zshz [--move-pane|--move-tab] [--all] [--tabs|--no-tabs] [--backend <backend>]"
+    "usage: herdr-zshz [--move-pane|--move-tab] [--all] [--tabs|--no-tabs] "
+    "[--vim|--no-vim|--normal|--insert|--mode <insert|normal>] [--backend <backend>]"
 )
 PLUGIN_ID = "herdr-zshz"
 SHOW_TABS_ENV = "HERDR_ZSHZ_SHOW_TABS"
+START_MODE_ENV = "HERDR_ZSHZ_START_MODE"
 
 
 class Failure(Exception):
@@ -144,6 +146,7 @@ def open_picker(
     show_all: bool,
     backend_override: str | None = None,
     show_tabs_override: bool | None = None,
+    start_mode_override: str | None = None,
 ) -> int:
     if move_mode == "pane":
         entrypoint = "move-pane"
@@ -173,6 +176,8 @@ def open_picker(
         command += ["--env", f"{BACKEND_ENV}={backend_override}"]
     if show_tabs_override is not None:
         command += ["--env", f"{SHOW_TABS_ENV}={'1' if show_tabs_override else '0'}"]
+    if start_mode_override is not None:
+        command += ["--env", f"{START_MODE_ENV}={start_mode_override}"]
     completed = subprocess.run(
         command,
         stdin=subprocess.DEVNULL,
@@ -380,15 +385,25 @@ def _resolve_show_tabs(settings: Settings, override: bool | None) -> bool:
     return settings.show_tabs
 
 
+def _resolve_start_mode(settings: Settings, override: str | None) -> str:
+    requested = override or os.environ.get(START_MODE_ENV, "").strip() or settings.start_mode
+    if requested not in START_MODES:
+        allowed = ", ".join(repr(mode) for mode in START_MODES)
+        raise PickerError(f"Unknown start mode {requested!r}; expected one of {allowed}")
+    return requested
+
+
 def interactive(
     move_mode: str | None,
     show_all: bool,
     settings: Settings,
     backend_override: str | None = None,
     show_tabs_override: bool | None = None,
+    start_mode_override: str | None = None,
 ) -> int:
     backend = resolve_backend(settings.backend, backend_override)
     show_tabs = _resolve_show_tabs(settings, show_tabs_override)
+    start_mode = _resolve_start_mode(settings, start_mode_override)
     names = load_names()
     herdr = Herdr()
     directory = state_dir()
@@ -489,7 +504,7 @@ def interactive(
             mapping_reader=mapping_reader,
             strict_mapping_reader=lambda: read_live_mapping_strict(path, instance),
             history=history,
-            start_mode=settings.start_mode,
+            start_mode=start_mode,
             theme_setting=settings.theme,
             workspaces=workspaces,
             panes=panes,
@@ -590,13 +605,14 @@ def close(path_argument: str, names: dict[str, str], herdr: Herdr) -> int:
 
 def parse(
     argv: list[str],
-) -> tuple[str | None, bool, bool, str | None, str | None, bool | None]:
+) -> tuple[str | None, bool, bool, str | None, str | None, bool | None, str | None]:
     move_mode: str | None = None
     show_all = False
     open_picker_mode = False
     close_path: str | None = None
     backend_override: str | None = None
     show_tabs_override: bool | None = None
+    start_mode_override: str | None = None
     remaining = list(argv)
     while remaining:
         argument = remaining.pop(0)
@@ -610,6 +626,19 @@ def parse(
             show_tabs_override = True
         elif argument == "--no-tabs":
             show_tabs_override = False
+        elif argument in ("--vim", "--normal"):
+            start_mode_override = "normal"
+        elif argument in ("--no-vim", "--insert"):
+            start_mode_override = "insert"
+        elif argument == "--mode":
+            if not remaining or not remaining[0].strip():
+                raise Failure(USAGE)
+            start_mode_override = remaining.pop(0).strip()
+        elif argument.startswith("--mode="):
+            value = argument.split("=", 1)[1].strip()
+            if not value:
+                raise Failure(USAGE)
+            start_mode_override = value
         elif argument == "open-picker":
             open_picker_mode = True
         elif argument == "--close":
@@ -632,16 +661,23 @@ def parse(
         close_path,
         backend_override,
         show_tabs_override,
+        start_mode_override,
     )
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     try:
-        move_mode, show_all, picker, close_path, backend_override, show_tabs_override = parse(
-            arguments
-        )
-        # Fail fast on a broken config.toml or invalid --backend, whatever the entry point.
+        (
+            move_mode,
+            show_all,
+            picker,
+            close_path,
+            backend_override,
+            show_tabs_override,
+            start_mode_override,
+        ) = parse(arguments)
+        # Fail fast on a broken config.toml or invalid --backend/--mode, whatever the entry point.
         settings = load_settings()
         if backend_override is not None:
             from .settings import BACKENDS
@@ -651,12 +687,28 @@ def main(argv: list[str] | None = None) -> int:
                 raise PickerError(
                     f"Unknown backend {backend_override!r}; expected one of {allowed}"
                 )
+        if start_mode_override is not None and start_mode_override not in START_MODES:
+            allowed = ", ".join(repr(mode) for mode in START_MODES)
+            raise PickerError(
+                f"Unknown start mode {start_mode_override!r}; expected one of {allowed}"
+            )
         if picker:
-            return open_picker(move_mode, show_all, backend_override, show_tabs_override)
+            return open_picker(
+                move_mode,
+                show_all,
+                backend_override,
+                show_tabs_override,
+                start_mode_override,
+            )
         if close_path is not None:
             return close(close_path, load_names(), Herdr())
         return interactive(
-            move_mode, show_all, settings, backend_override, show_tabs_override
+            move_mode,
+            show_all,
+            settings,
+            backend_override,
+            show_tabs_override,
+            start_mode_override,
         )
     except Failure as error:
         if str(error) == USAGE:

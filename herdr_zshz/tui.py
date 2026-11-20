@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 from collections.abc import Callable
@@ -15,9 +16,13 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.content import Content
+from textual.geometry import Size
 from textual.screen import ModalScreen
+from textual.scroll_view import ScrollView
+from textual.strip import Strip
 from textual.theme import Theme
 from textual.widgets import Static
+from textual.worker import get_current_worker
 
 from .config import normalize_path, workspace_label
 from .frecency import (
@@ -40,7 +45,7 @@ from .picker import (
     resolve_typed_or_picked,
     unknown_workspaces,
 )
-from .query import match_spans
+from .query import match_parsed, parse
 from .settings import SettingsError, herdr_theme_name
 from .state import StateError, snapshot_close_targets
 
@@ -198,18 +203,37 @@ class PreviewData:
     git: GitInfo | None = None
 
 
-def _git(path: str, *args: str) -> str:
-    try:
-        completed = subprocess.run(
-            ["git", "-C", path, *args],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    return completed.stdout.strip() if completed.returncode == 0 else ""
+def _git_outputs(path: str, *commands: tuple[str, ...]) -> list[str]:
+    """Run git commands concurrently in ``path``; failed ones yield ``""``."""
+
+    processes: list[subprocess.Popen[str] | None] = []
+    for args in commands:
+        try:
+            processes.append(
+                subprocess.Popen(
+                    ["git", "--no-optional-locks", "-C", path, *args],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                )
+            )
+        except OSError:
+            processes.append(None)
+    outputs: list[str] = []
+    for process in processes:
+        if process is None:
+            outputs.append("")
+            continue
+        try:
+            stdout, _ = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            outputs.append("")
+            continue
+        outputs.append(stdout.strip() if process.returncode == 0 else "")
+    return outputs
 
 
 def _parse_git_status_v2(output: str) -> dict[str, int | str] | None:
@@ -296,11 +320,14 @@ def _parse_git_log(output: str) -> tuple[CommitInfo, ...]:
 def _load_git_info(path: str) -> GitInfo | None:
     if not os.path.isdir(path):
         return None
-    status_out = _git(path, "status", "--porcelain=v2", "--branch")
+    status_out, log_out = _git_outputs(
+        path,
+        ("status", "--porcelain=v2", "--branch"),
+        ("log", "-n", "3", "--pretty=format:%h%x09%cr%x09%s"),
+    )
     parsed = _parse_git_status_v2(status_out)
     if parsed is None:
         return None
-    log_out = _git(path, "log", "-n", "3", "--pretty=format:%h%x09%cr%x09%s")
     return GitInfo(
         branch=str(parsed["branch"]),
         staged=int(parsed["staged"]),
@@ -326,13 +353,19 @@ class Bar(Static):
         return Content.from_rich_text(text, console=self.app.console)
 
 
-class RowList(Static):
-    """Workspace rows with tinted active bar and preserved per-token colours."""
+class RowList(ScrollView, can_focus=False):
+    """Workspace rows with tinted active bar and preserved per-token colours.
+
+    Rendered through the line API so only visible rows are styled, with a
+    per-row strip cache that cursor moves invalidate two lines at a time.
+    """
 
     POINTER = "\u258c"
 
     def __init__(self, **kwargs) -> None:
-        super().__init__("", markup=False, **kwargs)
+        super().__init__(**kwargs)
+        self._strips: dict[int, Strip] = {}
+        self._strip_width = -1
         self.rows: list[Row] = []
         self.spans: list[list[tuple[int, int]]] = []
         self.selected = 0
@@ -371,14 +404,43 @@ class RowList(Static):
         if palette is not None:
             self.palette = palette
         self.empty_hint = empty_hint
-        self.styles.height = max(len(rows), 1)
-        self.update(self._build_text())
+        self._strips.clear()
+        self.virtual_size = Size(self.scrollable_content_region.width, max(len(rows), 1))
+        self.refresh()
+
+    def set_selected(self, selected: int) -> None:
+        previous = self.selected
+        if previous == selected:
+            return
+        self.selected = selected
+        for index in (previous, selected):
+            self._strips.pop(index, None)
+            self.refresh_line(index)
 
     def _row_width(self) -> int:
-        for width in (self.size.width, self.container_size.width):
+        for width in (self.scrollable_content_region.width, self.container_size.width):
             if width > 0:
                 return width
         return 0
+
+    def render_line(self, y: int) -> Strip:
+        index = int(self.scroll_offset.y) + y
+        width = self._row_width()
+        if width != self._strip_width:
+            self._strips.clear()
+            self._strip_width = width
+        strip = self._strips.get(index)
+        if strip is None:
+            if not self.rows:
+                line = self._empty_text(width) if index == 0 else Text()
+            elif index < len(self.rows):
+                line = self._row_text(index, width)
+            else:
+                line = Text()
+            strip = Strip(line.render(self.app.console), line.cell_len)
+            strip = strip.crop_extend(0, width, None).apply_style(self.rich_style)
+            self._strips[index] = strip
+        return strip
 
     @staticmethod
     def _middle_truncate(segment: Text, max_width: int, ellipsis_style: str) -> Text:
@@ -420,116 +482,122 @@ class RowList(Static):
         result.append_text(segment[tail_idx:])
         return result
 
+    def _empty_text(self, width: int) -> Text:
+        if self.empty_hint is not None:
+            message, style = self.empty_hint
+        else:
+            message = "  No matching workspaces — press M-a for all dirs or type a path"
+            style = self.palette.muted
+        line = Text(message, style=style)
+        if width:
+            line.truncate(width, overflow="ellipsis")
+        return line
+
     def _build_text(self) -> Text:
-        text = Text()
+        """Render every row as one Text (the widget itself renders per line)."""
         width = self._row_width()
-        palette = self.palette
         if not self.rows:
-            if self.empty_hint is not None:
-                message, style = self.empty_hint
-            else:
-                message = "  No matching workspaces — press M-a for all dirs or type a path"
-                style = palette.muted
-            line = Text(message, style=style)
-            if width:
-                line.truncate(width, overflow="ellipsis")
-            text.append_text(line)
-            return text
-
-        tinted = self.selected_row_style.startswith("on ")
-        for index, row in enumerate(self.rows):
-            line = Text()
-            selected = index == self.selected
-            keep_tokens = not selected or tinted
-
-            pointer_style = f"bold {palette.primary}" if keep_tokens else "bold"
-            line.append(f"{self.POINTER} " if selected else "  ", style=pointer_style)
-
-            if row.marker == CURRENT_MARK:
-                marker_style = f"bold {palette.warning}" if keep_tokens else "bold"
-            elif row.marker == OPEN_MARK:
-                marker_style = f"bold {palette.success}" if keep_tokens else "bold"
-            else:
-                marker_style = ""
-            line.append(row.marker, style=marker_style)
-            line.append(" ")
-
-            shown = row.shown
-            suffix_start = shown.rfind("  [")
-            if suffix_start != -1 and shown.endswith("]"):
-                body, suffix = shown[:suffix_start], shown[suffix_start:]
-            else:
-                body, suffix = shown, ""
-            dir_end = body.rfind("/") + 1
-            hot = row.marker in (CURRENT_MARK, OPEN_MARK)
-            shown_text = Text(shown)
-
-            if keep_tokens:
-                if dir_end:
-                    shown_text.stylize(palette.muted, 0, dir_end)
-                if len(body) > dir_end:
-                    base_style = (
-                        f"bold {palette.foreground}".strip()
-                        if (selected or hot)
-                        else palette.foreground
-                    )
-                    if base_style:
-                        shown_text.stylize(base_style, dir_end, len(body))
-                if suffix:
-                    suffix_style = (
-                        palette.secondary
-                        if (selected or hot)
-                        else f"italic {palette.secondary}"
-                    )
-                    gap_len = len(suffix) - len(suffix.lstrip(" "))
-                    shown_text.stylize(
-                        suffix_style, len(body) + gap_len, len(shown)
-                    )
-            elif len(body) > dir_end:
-                shown_text.stylize("bold", dir_end, len(body))
-
-            match_style = (
-                f"bold underline {palette.warning}"
-                if keep_tokens
-                else "bold underline"
-            )
-            for start, end in self.spans[index]:
-                start = max(0, min(start, len(shown)))
-                end = max(start, min(end, len(shown)))
-                if end > start:
-                    shown_text.stylize(match_style, start, end)
-
-            badge = format_agent_badges(row.agents) if row.agents else ""
-            badge_width = cell_len(badge) if badge else 0
-            show_badge = bool(badge) and (
-                not width or (width - 4 - badge_width - 2 > 6)
-            )
-            if width:
-                avail = width - 4 - (badge_width + 2 if show_badge else 0)
-                shown_text = self._middle_truncate(
-                    shown_text, avail, palette.muted if keep_tokens else ""
-                )
-            line.append_text(shown_text)
-
-            if show_badge:
-                gap = max(2, width - line.cell_len - badge_width) if width else 2
-                line.append(" " * gap)
-                line.append(
-                    badge,
-                    style=f"bold {palette.warning}" if keep_tokens else "bold",
-                )
-            if width:
-                line.truncate(width, overflow="ellipsis", pad=selected)
-            if selected:
-                line.stylize(self.selected_row_style)
-            text.append_text(line)
+            return self._empty_text(width)
+        text = Text()
+        for index in range(len(self.rows)):
+            text.append_text(self._row_text(index, width))
             text.append("\n")
         return text
+
+    def _row_text(self, index: int, width: int) -> Text:
+        palette = self.palette
+        tinted = self.selected_row_style.startswith("on ")
+        row = self.rows[index]
+        line = Text()
+        selected = index == self.selected
+        keep_tokens = not selected or tinted
+
+        pointer_style = f"bold {palette.primary}" if keep_tokens else "bold"
+        line.append(f"{self.POINTER} " if selected else "  ", style=pointer_style)
+
+        if row.marker == CURRENT_MARK:
+            marker_style = f"bold {palette.warning}" if keep_tokens else "bold"
+        elif row.marker == OPEN_MARK:
+            marker_style = f"bold {palette.success}" if keep_tokens else "bold"
+        else:
+            marker_style = ""
+        line.append(row.marker, style=marker_style)
+        line.append(" ")
+
+        shown = row.shown
+        suffix_start = shown.rfind("  [")
+        if suffix_start != -1 and shown.endswith("]"):
+            body, suffix = shown[:suffix_start], shown[suffix_start:]
+        else:
+            body, suffix = shown, ""
+        dir_end = body.rfind("/") + 1
+        hot = row.marker in (CURRENT_MARK, OPEN_MARK)
+        shown_text = Text(shown)
+
+        if keep_tokens:
+            if dir_end:
+                shown_text.stylize(palette.muted, 0, dir_end)
+            if len(body) > dir_end:
+                base_style = (
+                    f"bold {palette.foreground}".strip()
+                    if (selected or hot)
+                    else palette.foreground
+                )
+                if base_style:
+                    shown_text.stylize(base_style, dir_end, len(body))
+            if suffix:
+                suffix_style = (
+                    palette.secondary
+                    if (selected or hot)
+                    else f"italic {palette.secondary}"
+                )
+                gap_len = len(suffix) - len(suffix.lstrip(" "))
+                shown_text.stylize(
+                    suffix_style, len(body) + gap_len, len(shown)
+                )
+        elif len(body) > dir_end:
+            shown_text.stylize("bold", dir_end, len(body))
+
+        match_style = (
+            f"bold underline {palette.warning}"
+            if keep_tokens
+            else "bold underline"
+        )
+        for start, end in self.spans[index]:
+            start = max(0, min(start, len(shown)))
+            end = max(start, min(end, len(shown)))
+            if end > start:
+                shown_text.stylize(match_style, start, end)
+
+        badge = format_agent_badges(row.agents) if row.agents else ""
+        badge_width = cell_len(badge) if badge else 0
+        show_badge = bool(badge) and (
+            not width or (width - 4 - badge_width - 2 > 6)
+        )
+        if width:
+            avail = width - 4 - (badge_width + 2 if show_badge else 0)
+            shown_text = self._middle_truncate(
+                shown_text, avail, palette.muted if keep_tokens else ""
+            )
+        line.append_text(shown_text)
+
+        if show_badge:
+            gap = max(2, width - line.cell_len - badge_width) if width else 2
+            line.append(" " * gap)
+            line.append(
+                badge,
+                style=f"bold {palette.warning}" if keep_tokens else "bold",
+            )
+        if width:
+            line.truncate(width, overflow="ellipsis", pad=selected)
+        if selected:
+            line.stylize(self.selected_row_style)
+        return line
 
     def on_click(self, event: events.Click) -> None:
         if not self.rows or event.button != 1:
             return
-        index = event.y
+        index = event.y + int(self.scroll_offset.y)
         if 0 <= index < len(self.rows):
             selector = getattr(self.app, "select_row_at", None)
             if callable(selector):
@@ -847,15 +915,15 @@ class PickerApp(App[Result | None]):
         border-bottom: solid $panel;
     }
     #body { height: 1fr; background: $background; }
-    #list-scroll {
+    #list {
         width: 1fr;
         height: 1fr;
         margin-top: 1;
         padding: 0 1;
+        overflow-x: hidden;
         scrollbar-size-vertical: 1;
         background: $background;
     }
-    #list { text-wrap: nowrap; text-overflow: ellipsis; }
     #preview {
         width: 40%;
         height: 1fr;
@@ -945,6 +1013,8 @@ class PickerApp(App[Result | None]):
         self._preview_cache: dict[str, PreviewData] = {}
         self._preview_generation = 0
         self._preview_timer = None
+        self._preview_inflight: str | None = None
+        self._preview_eager = True
         self._snapshot_workspaces = workspaces
         self._snapshot_panes = panes
         self._last_width = 0
@@ -984,8 +1054,7 @@ class PickerApp(App[Result | None]):
     def compose(self) -> ComposeResult:
         yield Bar(self._query_text, id="query")
         with Horizontal(id="body"):
-            with VerticalScroll(id="list-scroll", can_focus=False):
-                yield RowList(id="list")
+            yield RowList(id="list")
             yield Static("", id="preview", markup=False)
         yield Bar(self._footer_text, id="status")
 
@@ -1132,8 +1201,9 @@ class PickerApp(App[Result | None]):
         )
         self.filtered = []
         self.spans = []
+        groups = parse(self.query)
         for row in self.rows:
-            spans = match_spans(self.query, row.shown)
+            spans = match_parsed(groups, row.shown)
             if spans is not None:
                 self.filtered.append(row)
                 self.spans.append(sorted(spans))
@@ -1169,7 +1239,7 @@ class PickerApp(App[Result | None]):
 
     def scroll_selection(self) -> None:
         """Scroll only when the cursor crosses the viewport edge."""
-        container = self.query_one("#list-scroll", VerticalScroll)
+        container = self.row_list
         height = max(1, container.size.height)
         top = max(0, int(container.scroll_offset.y))
         if self.index < top:
@@ -1181,15 +1251,7 @@ class PickerApp(App[Result | None]):
         if not self.filtered:
             return
         self.index = max(0, min(index, len(self.filtered) - 1))
-        palette = self.palette()
-        self.row_list.set_rows(
-            self.filtered,
-            self.spans,
-            self.index,
-            self.selection_style(),
-            palette=palette,
-            empty_hint=self._empty_hint(palette),
-        )
+        self.row_list.set_selected(self.index)
         self.scroll_selection()
         self.show_preview()
 
@@ -1414,6 +1476,12 @@ class PickerApp(App[Result | None]):
 
     def _schedule_preview_load(self, path: str) -> None:
         self._cancel_preview_timer()
+        if path == self._preview_inflight:
+            return
+        if self._preview_eager:
+            self._preview_eager = False
+            self._start_preview_load(path)
+            return
         generation = self._preview_generation
         self._preview_timer = self.set_timer(
             0.06, lambda: self._fire_preview_load(path, generation)
@@ -1423,7 +1491,7 @@ class PickerApp(App[Result | None]):
         self._preview_timer = None
         if generation != self._preview_generation or path != self._preview_path:
             return
-        self.load_preview(path)
+        self._start_preview_load(path)
 
     def show_preview(self) -> None:
         row = self.selected_row()
@@ -1453,6 +1521,7 @@ class PickerApp(App[Result | None]):
             self._cancel_preview_timer()
             self.preview_data = cached
             self.update_preview()
+            self._prefetch_neighbours()
             return
         self.preview_data = PreviewData(path=row.path, label=row.label, loading=True)
         self.update_preview()
@@ -1462,6 +1531,7 @@ class PickerApp(App[Result | None]):
         self._cancel_preview_timer()
         self._preview_cache.clear()
         self._preview_path = ""
+        self._preview_inflight = None
         self._preview_generation += 1
         self._snapshot_workspaces = None
         self._snapshot_panes = None
@@ -1681,9 +1751,44 @@ class PickerApp(App[Result | None]):
         self.update_status()
         self.update_preview()
 
+    def _start_preview_load(self, path: str) -> None:
+        self._preview_inflight = path
+        self.load_preview(path)
+
     @work(exclusive=True, thread=True, group="preview")
     def load_preview(self, path: str) -> None:
         generation = self._preview_generation
+        self._deliver_preview(path, self._build_preview(path), generation)
+
+    @work(exclusive=True, thread=True, group="prefetch")
+    def prefetch_previews(self, paths: list[str]) -> None:
+        generation = self._preview_generation
+        worker = get_current_worker()
+        for path in paths:
+            if worker.is_cancelled or generation != self._preview_generation:
+                return
+            self._deliver_preview(path, self._build_preview(path), generation)
+
+    def _deliver_preview(self, path: str, data: PreviewData, generation: int) -> None:
+        try:
+            self.call_from_thread(self._preview_loaded, path, data, generation)
+        except Exception:  # noqa: BLE001 - app may have exited already
+            pass
+
+    def _prefetch_neighbours(self) -> None:
+        if not self._preview_should_display():
+            return
+        paths = [
+            self.filtered[index].path
+            for index in (self.index + 1, self.index - 1)
+            if 0 <= index < len(self.filtered)
+            and self.filtered[index].path not in self._preview_cache
+            and self.filtered[index].path != self._preview_inflight
+        ]
+        if paths:
+            self.prefetch_previews(paths)
+
+    def _build_preview(self, path: str) -> PreviewData:
         workspaces = self._snapshot_workspaces
         panes = self._snapshot_panes
         if workspaces is None or panes is None:
@@ -1757,25 +1862,24 @@ class PickerApp(App[Result | None]):
                     sessions=tuple(sessions),
                 )
             )
-        data = PreviewData(
+        return PreviewData(
             path=path,
             label=label,
             workspaces=tuple(ws_infos),
             git=_load_git_info(path),
         )
-        try:
-            self.call_from_thread(self._preview_loaded, path, data, generation)
-        except Exception:  # noqa: BLE001 - app may have exited already
-            pass
 
     def _preview_loaded(self, path: str, data: PreviewData, generation: int) -> None:
         if generation != self._preview_generation:
             return
         self._preview_cache[path] = data
+        if path == self._preview_inflight:
+            self._preview_inflight = None
         if path != self._preview_path:
             return
         self.preview_data = data
         self.update_preview()
+        self._prefetch_neighbours()
 
     def safe_mapping(self) -> dict[str, str]:
         try:
@@ -1808,8 +1912,8 @@ class PickerApp(App[Result | None]):
         if target is None:
             return
         try:
-            result = build_result(
-                target, self.move_mode, self.src_pane, self.herdr, None
+            result = await asyncio.to_thread(
+                build_result, target, self.move_mode, self.src_pane, self.herdr, None
             )
         except (PickerError, HerdrError) as error:
             self.set_error(str(error))
@@ -1820,10 +1924,17 @@ class PickerApp(App[Result | None]):
         result.choice = choice
         self.exit(result)
 
+    async def herdr_state(self) -> tuple[list[dict], list[dict]]:
+        """Fetch workspaces and panes concurrently without blocking the UI."""
+        workspaces, panes = await asyncio.gather(
+            asyncio.to_thread(self.herdr.workspaces),
+            asyncio.to_thread(self.herdr.panes),
+        )
+        return workspaces, panes
+
     async def resolve_choice(self, target: str) -> tuple[str, str | None] | None | str:
         try:
-            workspaces = self.herdr.workspaces()
-            panes = self.herdr.panes()
+            workspaces, panes = await self.herdr_state()
         except HerdrError as error:
             self.set_error(str(error))
             return CANCELLED
@@ -1843,7 +1954,7 @@ class PickerApp(App[Result | None]):
         path = row.path
         label = workspace_label(path, self.names)
         try:
-            close_ids, agent_tuples = self.close_snapshot(path)
+            close_ids, agent_tuples = await self.close_snapshot(path)
         except StateError as error:
             self.set_error(f"Invalid workspace mapping: {error.path}")
             return
@@ -1851,7 +1962,7 @@ class PickerApp(App[Result | None]):
             self.set_error(str(error))
             return
         if not close_ids:
-            self.refresh_workspace_state()
+            await self.refresh_workspace_state()
             return
         approved_ids = set(close_ids)
         approved_tuples: set[tuple[str, str, str]] = set()
@@ -1867,7 +1978,7 @@ class PickerApp(App[Result | None]):
                 approved_tuples |= unapproved
                 approved_ids |= set(close_ids)
             try:
-                close_ids, agent_tuples = self.close_snapshot(path)
+                close_ids, agent_tuples = await self.close_snapshot(path)
             except StateError as error:
                 self.set_error(f"Invalid workspace mapping: {error.path}")
                 return
@@ -1878,29 +1989,29 @@ class PickerApp(App[Result | None]):
                 continue
             for workspace_id in [w for w in close_ids if w in approved_ids]:
                 try:
-                    self.herdr.workspace_close(workspace_id)
+                    await asyncio.to_thread(self.herdr.workspace_close, workspace_id)
                 except HerdrError as error:
                     self.set_error(str(error))
                     return
-            self.refresh_workspace_state()
+            await self.refresh_workspace_state()
             return
         self.set_error(
             f"Close aborted: {label} kept changing after {MAX_CLOSE_ROUNDS} attempts"
         )
 
-    def close_snapshot(self, path: str) -> tuple[list[str], set[tuple[str, str, str]]]:
-        workspaces = self.herdr.workspaces()
-        panes = self.herdr.panes()
+    async def close_snapshot(
+        self, path: str
+    ) -> tuple[list[str], set[tuple[str, str, str]]]:
+        workspaces, panes = await self.herdr_state()
         mapping = self.strict_mapping_reader()
         close_ids, agent_tuples, _ = snapshot_close_targets(
             path, workspaces, panes, mapping, self.names
         )
         return close_ids, agent_tuples
 
-    def refresh_workspace_state(self) -> None:
+    async def refresh_workspace_state(self) -> None:
         try:
-            workspaces = self.herdr.workspaces()
-            panes = self.herdr.panes()
+            workspaces, panes = await self.herdr_state()
         except HerdrError as error:
             self.set_error(str(error))
             self.set_rows()
@@ -1998,7 +2109,7 @@ class PickerApp(App[Result | None]):
         self.apply_filter()
 
     def page(self, delta: int) -> None:
-        container = self.query_one("#list-scroll", VerticalScroll)
+        container = self.row_list
         self.set_index(self.index + delta * max(1, container.size.height - 1))
 
     # -- keys -------------------------------------------------------------
@@ -2113,7 +2224,7 @@ class PickerApp(App[Result | None]):
     }
 
     def _viewport_bounds(self) -> tuple[int, int]:
-        container = self.query_one("#list-scroll", VerticalScroll)
+        container = self.row_list
         height = max(1, container.size.height)
         top = max(0, int(container.scroll_offset.y))
         if not self.filtered:

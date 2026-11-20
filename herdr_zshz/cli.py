@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import importlib
 import json
 import os
 import signal
@@ -353,12 +354,22 @@ def interactive(
     backend = resolve_backend(settings.backend, backend_override)
     names = load_names()
     herdr = Herdr()
-    socket = socket_path(herdr)
     directory = state_dir()
     directory.mkdir(parents=True, exist_ok=True)
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        if backend == "textual":
+            # Warm the Textual import while the herdr and history I/O run.
+            pool.submit(importlib.import_module, f"{__package__}.tui")
+        socket_future = pool.submit(socket_path, herdr)
+        workspaces_future = pool.submit(herdr.workspaces)
+        panes_future = pool.submit(herdr.panes)
+        history_future = pool.submit(read_history, source=settings.history)
+        socket = socket_future.result()
+        workspaces = workspaces_future.result()
+        panes = panes_future.result()
+        history = history_future.result()
     path = state_file(socket)
     instance = socket_instance(socket)
-    workspaces, panes = _fetch_herdr_state(herdr)
     state = read_mapping(path)
     mapping = (
         dict(state["workspaces"]) if state.get("instance") == instance else {}
@@ -367,7 +378,6 @@ def interactive(
     opened = open_paths(workspaces, panes, mapping, names)
     current = current_project(pane_id, panes, workspaces, mapping, names)
     agents = agents_by_path(workspaces, panes, mapping, names)
-    history = read_history(source=settings.history)
     paths_git = rank_paths(history, current, opened, False)
     paths_all = rank_paths(history, current, opened, True)
     mapping_reader = lambda: read_live_mapping(path, instance)  # noqa: E731

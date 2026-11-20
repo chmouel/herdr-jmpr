@@ -66,7 +66,12 @@ def _find(term: Term, text: str) -> tuple[int, int] | None:
 def match_spans(query: str, text: str) -> list[tuple[int, int]] | None:
     """Return the matched spans, or None when the query does not match."""
 
-    groups = parse(query)
+    return match_parsed(parse(query), text)
+
+
+def match_parsed(groups: list[list[Term]], text: str) -> list[tuple[int, int]] | None:
+    """Like :func:`match_spans` for a query already split by :func:`parse`."""
+
     spans: list[tuple[int, int]] = []
     for group in groups:
         clause_hit = False

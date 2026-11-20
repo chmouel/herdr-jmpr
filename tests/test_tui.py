@@ -1,13 +1,12 @@
 import os
 import tempfile
-import threading
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from rich.cells import cell_len
 from textual.app import App
-from textual.containers import VerticalScroll
+from textual.worker import NoActiveWorker, get_current_worker
 
 from herdr_zshz.frecency import agent_icon, format_agent_badges, rank_paths
 from herdr_zshz.settings import SettingsError
@@ -20,6 +19,7 @@ from herdr_zshz.tui import (
     HelpModal,
     PickerApp,
     PreviewData,
+    RowList,
     SelectWorkspaceModal,
     SessionInfo,
     ThemePickerModal,
@@ -181,7 +181,7 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
             await pilot.press("escape")
             await pilot.press("G")
             self.assertEqual(app.index, len(paths) - 1)
-            container = app.query_one("#list-scroll", VerticalScroll)
+            container = app.row_list
             top = int(container.scroll_offset.y)
             self.assertGreater(top, 0)
             await pilot.press("H")
@@ -207,7 +207,7 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
         app = self.app(paths_git=paths, paths_all=paths)
         async with app.run_test(size=(100, 12)) as pilot:
             await pilot.pause()
-            container = app.query_one("#list-scroll", VerticalScroll)
+            container = app.row_list
             container.scroll_to(y=7, animate=False)
             await pilot.pause()
             self.assertEqual(int(container.scroll_offset.y), 7)
@@ -216,6 +216,53 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.index, 7)
             self.assertNotEqual(app.index, 0)
 
+    async def test_first_preview_loads_at_once_and_prefetches_the_next_row(self):
+        app = self.app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            self.assertIsNone(app._preview_timer)
+            for _ in range(200):
+                if self.other in app._preview_cache:
+                    break
+                await pilot.pause(0.02)
+            self.assertIn(self.repo, app._preview_cache)
+            self.assertIn(self.other, app._preview_cache)
+            await pilot.press("down")
+            self.assertFalse(app.preview_data.loading)
+            self.assertEqual(app.preview_data.path, self.other)
+
+    async def test_click_on_a_scrolled_list_selects_the_row_under_the_pointer(self):
+        paths = [str(self.root / f"m{index:03}") for index in range(30)]
+        for path in paths:
+            os.makedirs(path, exist_ok=True)
+        app = self.app(paths_git=paths, paths_all=paths)
+        async with app.run_test(size=(100, 12)) as pilot:
+            await pilot.pause()
+            app.row_list.scroll_to(y=10, animate=False)
+            await pilot.pause()
+            await pilot.click("#list", offset=(4, 2))
+            self.assertEqual(app.index, 12)
+
+    async def test_only_visible_and_changed_rows_are_rendered(self):
+        paths = [str(self.root / f"v{index:04}") for index in range(500)]
+        for path in paths:
+            os.makedirs(path, exist_ok=True)
+        app = self.app(paths_git=paths, paths_all=paths)
+        async with app.run_test(size=(100, 20)) as pilot:
+            await pilot.pause()
+            height = app.row_list.size.height
+            with mock.patch.object(
+                RowList, "_row_text", autospec=True, side_effect=RowList._row_text
+            ) as row_text:
+                await pilot.press("v")
+                await pilot.pause()
+                self.assertLessEqual(row_text.call_count, height)
+                row_text.reset_mock()
+                await pilot.press("down")
+                await pilot.pause()
+                self.assertEqual(
+                    sorted(call.args[1] for call in row_text.call_args_list), [0, 1]
+                )
+
     async def test_cursor_moves_without_scrolling_the_list(self):
         paths = [str(self.root / f"c{index:03}") for index in range(40)]
         for path in paths:
@@ -223,7 +270,7 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
         app = self.app(paths_git=paths, paths_all=paths)
         async with app.run_test(size=(100, 20)) as pilot:
             await pilot.pause()
-            container = app.query_one("#list-scroll", VerticalScroll)
+            container = app.row_list
             height = container.size.height
             self.assertGreater(height, 3)
             # Inside the viewport the list must stay still, and the container
@@ -256,7 +303,7 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
         app = self.app(paths_git=paths, paths_all=paths)
         async with app.run_test(size=(100, 20)) as pilot:
             await pilot.pause()
-            self.assertFalse(app.query_one("#list-scroll", VerticalScroll).can_focus)
+            self.assertFalse(app.row_list.can_focus)
             await pilot.press("down")
             self.assertEqual(app.index, 1)
             await pilot.press("ctrl+n")
@@ -300,7 +347,7 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(70, 16)) as pilot:
             await pilot.pause()
             await pilot.press("down")
-            text = app.row_list.render()
+            text = app.row_list._build_text()
             lines = str(text).split("\n")
             # One screen line per row: wrapping would shift every later row and
             # hide the cursor.
@@ -318,8 +365,8 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(70, 16)) as pilot:
             await pilot.pause()
             await pilot.press("down")
-            col_width = app.query_one("#list-scroll").content_size.width
-            text = app.row_list.render()
+            col_width = app.row_list.scrollable_content_region.width
+            text = app.row_list._build_text()
             lines = str(text).split("\n")
             self.assertEqual(len(lines[0]), col_width)
             self.assertEqual(len(lines[1]), col_width)
@@ -841,7 +888,7 @@ class CloseRevalidationTupleTest(unittest.IsolatedAsyncioTestCase):
 
 
 class SequencedPaneHerdr(FakeHerdr):
-    """Serves one pane snapshot per main-thread ``panes()`` call."""
+    """Serves one pane snapshot per ``panes()`` call outside preview workers."""
 
     def __init__(self, workspaces, snapshots):
         super().__init__(workspaces=workspaces, panes=snapshots[0])
@@ -850,7 +897,11 @@ class SequencedPaneHerdr(FakeHerdr):
 
     def panes(self):
         index = min(self.served, len(self.snapshots) - 1)
-        if threading.current_thread() is threading.main_thread():
+        try:
+            group = get_current_worker().group
+        except NoActiveWorker:
+            group = ""
+        if group not in ("preview", "prefetch"):
             self.served += 1
         return [dict(pane) for pane in self.snapshots[index]]
 
@@ -1281,8 +1332,7 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_layout_rules_live_in_default_css(self):
         css = PickerApp.DEFAULT_CSS
-        self.assertIn("text-wrap: nowrap", css)
-        self.assertIn("text-overflow: ellipsis", css)
+        self.assertIn("overflow-x: hidden", css)
         self.assertIn("#preview", css)
         self.assertIn("width: 40%", css)
 
@@ -1290,8 +1340,7 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(100, 24)) as pilot:
             await pilot.pause()
             rows = app.query_one("#list")
-            self.assertEqual(rows.styles.text_wrap, "nowrap")
-            self.assertEqual(rows.styles.text_overflow, "ellipsis")
+            self.assertEqual(rows.styles.overflow_x, "hidden")
             self.assertEqual(app.query_one("#preview").styles.width.value, 40.0)
 
     async def test_wide_query_and_error_fit_the_prompt_bar_in_cells(self):

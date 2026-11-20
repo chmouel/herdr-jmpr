@@ -1141,7 +1141,11 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
                         agents=("copilot",),
                         sessions=(
                             SessionInfo("copilot", "idle", "Fix auth bug"),
-                            SessionInfo("pi", "working", "Review PR #42"),
+                            SessionInfo(
+                                "pi",
+                                "working",
+                                "Review PR #42 and verify long session titles wrap cleanly across multiple lines",
+                            ),
                         ),
                     ),
                 ),
@@ -1164,9 +1168,12 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
                 "repo",
                 self.repo,
                 "Current workspace (w1)",
-                "tabs    t1, t2",
-                f"agents  {agent_icon('copilot')} copilot \u25cb Fix auth bug",
-                f"{agent_icon('pi')} pi      \u25cf Review PR #42",
+                "tabs  t1, t2",
+                f"{agent_icon('copilot')} copilot  \u25cb idle",
+                "\u2502 Fix auth bug",
+                f"{agent_icon('pi')} pi  \u25cf working",
+                "\u2502 Review PR #42",
+                "wrap cleanly across",
                 "\u2387 main  worktree  +1 ~2 ?1  \u21911",
                 "a1b2c3d 2h ago",
                 "d4e5f6a 1d ago",
@@ -1336,9 +1343,9 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             app.update_preview()
             preview = self.text(app, "#preview")
             for needle in (
-                "tabs    t1",
+                "tabs  t1",
                 f"agents  {agent_icon('copilot')} copilot",
-                "tabs    t2",
+                "tabs  t2",
                 f"agents  {agent_icon('codex')} codex",
             ):
                 self.assertIn(needle, preview)

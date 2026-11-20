@@ -1495,42 +1495,54 @@ class PickerApp(App[Result | None]):
                     for t in ws.tabs
                 ]
                 tabs = ", ".join(short_tabs) if short_tabs else "-"
-                self._append_field(
-                    text, "tabs", tabs, palette, width, style=palette.foreground
+                tabs_line = Text()
+                tabs_line.append("tabs  ", style=palette.muted)
+                tabs_line.append(
+                    self._ellipsise(tabs, max(4, width - 6)),
+                    style=palette.foreground,
                 )
+                text.append_text(tabs_line)
+                text.append("\n")
                 if ws.sessions:
-                    agent_width = max(len(s.agent) for s in ws.sessions)
-                    for idx, session in enumerate(ws.sessions):
-                        prefix = f"  {'agents' if idx == 0 else '':<8}"
-                        text.append(prefix, style=palette.muted)
-                        agent_col = f"{agent_icon(session.agent)} {session.agent:<{agent_width}}"
-                        text.append(agent_col, style=f"bold {palette.warning}")
+                    text.append("\n")
+                    for session in ws.sessions:
+                        header = Text()
+                        header.append(
+                            f"{agent_icon(session.agent)} {session.agent}",
+                            style=f"bold {palette.warning}",
+                        )
                         if session.status == "working":
-                            text.append(" \u25cf ", style=f"bold {palette.success}")
+                            header.append("  \u25cf ", style=f"bold {palette.success}")
+                            header.append("working", style=palette.success)
+                            rail_style = palette.success
                         elif session.status and session.status != "unknown":
-                            text.append(" \u25cb ", style=palette.muted)
+                            header.append(f"  \u25cb {session.status}", style=palette.muted)
+                            rail_style = palette.muted
                         else:
-                            text.append("  ")
-                        used = len(prefix) + cell_len(agent_col) + (3 if session.status and session.status != "unknown" else 2)
-                        room = max(4, width - used)
-                        if session.title:
-                            text.append(
-                                self._ellipsise(session.title, room),
-                                style=palette.foreground,
-                            )
+                            rail_style = palette.muted
+                        header.truncate(width, overflow="ellipsis")
+                        text.append_text(header)
                         text.append("\n")
+                        if session.title:
+                            wrapped = self._wrap_subject(
+                                session.title, max(8, width - 2), max_lines=3
+                            )
+                            for wrapped_line in wrapped.splitlines():
+                                text.append("\u2502 ", style=rail_style)
+                                text.append(wrapped_line, style=palette.foreground)
+                                text.append("\n")
                 elif ws.agents:
                     agent_str = ", ".join(
                         f"{agent_icon(agent)} {agent}" for agent in ws.agents
                     )
-                    self._append_field(
-                        text,
-                        "agents",
-                        agent_str,
-                        palette,
-                        width,
+                    agents_line = Text()
+                    agents_line.append("agents  ", style=palette.muted)
+                    agents_line.append(
+                        self._ellipsise(agent_str, max(4, width - 8)),
                         style=f"bold {palette.warning}",
                     )
+                    text.append_text(agents_line)
+                    text.append("\n")
 
         git_info = data.git
         if git_info is not None:
@@ -1606,21 +1618,6 @@ class PickerApp(App[Result | None]):
         if current:
             lines.append(current)
         return "\n".join(lines[:max_lines])
-
-    def _append_field(
-        self,
-        text: Text,
-        key: str,
-        value: str,
-        palette: Palette,
-        width: int,
-        style: str = "",
-    ) -> None:
-        prefix = f"  {key:<8}"
-        room = max(1, width - len(prefix))
-        text.append(prefix, style=palette.muted)
-        text.append(self._ellipsise(value, room), style=style)
-        text.append("\n")
 
     def on_resize(self, event: events.Resize) -> None:
         self._frame_width = event.size.width

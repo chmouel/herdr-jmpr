@@ -2,7 +2,7 @@ id = "herdr-jmpr"
 name = "jmpr"
 version = "0.1.0"
 min_herdr_version = "0.9.0"
-description = "Jump to project workspaces ranked by zsh-z frecency"
+description = "Jump to project workspaces ranked by zsh-z or zoxide frecency"
 platforms = ["linux", "macos"]
 
 [[build]]
@@ -31,7 +31,7 @@ command = ["bin/herdr-jmpr", "open-picker", "--move-tab"]
 
 [[actions]]
 id = "jump-all"
-title = "Jump to directory (all zsh-z)…"
+title = "Jump to directory (all zsh-z / zoxide)…"
 contexts = ["pane", "tab", "workspace", "global"]
 command = ["bin/herdr-jmpr", "open-picker", "--all"]
 

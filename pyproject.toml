@@ -1,7 +1,7 @@
 [project]
 name = "herdr-jmpr"
 version = "0.1.0"
-description = "Herdr plugin: jump to project workspaces ranked by zsh-z frecency"
+description = "Herdr plugin: jump to project workspaces ranked by zsh-z or zoxide frecency"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"

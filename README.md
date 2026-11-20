@@ -6,8 +6,8 @@
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-D7FF64?logo=ruff&logoColor=black)](https://docs.astral.sh/ruff/)
 [![License: MIT](https://img.shields.io/github/license/chmouel/herdr-jmpr)](LICENSE)
 
-Jump to project workspaces in [Herdr](https://herdr.dev), ranked by your `zsh-z`
-history. The default picker is a Textual app with fzf-style search, vim normal
+Jump to project workspaces in [Herdr](https://herdr.dev), ranked by your `zsh-z` or
+`zoxide` history. The default picker is a Textual app with fzf-style search, vim normal
 mode, a live preview, and a tree of each workspace's tabs with agent status.
 `fzf`, `skim` (`sk`), and `gum` work as alternatives.
 
@@ -50,7 +50,7 @@ the preview pane uses for repository status.
 | Jump to project workspace… | Open the picker and jump to (or create) the workspace you pick |
 | Move pane to project workspace… | Move the focused pane there instead |
 | Move tab to project workspace… | Move the focused tab there, replaying its split layout |
-| Jump to directory (all zsh-z)… | Pick from every zsh-z directory, not only git roots |
+| Jump to directory (all zsh-z / zoxide)… | Pick from every history directory (zsh-z or zoxide), not only git roots |
 
 Each action opens the picker in an 80% by 80% popup.
 
@@ -123,7 +123,7 @@ handy for trying a different setup.
 ## Textual picker
 
 The picker starts in insert mode, or in normal mode when `start_mode = "normal"`.
-It lists git repository roots. `alt+a` switches to every zsh-z directory.
+It lists git repository roots. `alt+a` switches to every history directory (zsh-z or zoxide).
 
 Insert mode:
 

@@ -173,10 +173,18 @@ class GitInfo:
 
 
 @dataclass(frozen=True)
+class SessionInfo:
+    agent: str
+    status: str = ""
+    title: str = ""
+
+
+@dataclass(frozen=True)
 class WorkspaceInfo:
     workspace_id: str
     tabs: tuple[str, ...] = ()
     agents: tuple[str, ...] = ()
+    sessions: tuple[SessionInfo, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -437,13 +445,14 @@ class RowList(Static):
                 line.truncate(width, overflow="ellipsis", pad=False)
             if row.agents:
                 badge = format_agent_badges(row.agents)
-                badge_text = f"  {badge}"
+                badge_width = cell_len(badge)
                 if width:
-                    room = width - cell_len(badge_text)
+                    room = width - badge_width - 2
                     if room > 6 and line.cell_len > room:
                         line.truncate(room, overflow="ellipsis", pad=False)
-                    if line.cell_len + cell_len(badge_text) <= width:
-                        line.append("  ")
+                    if line.cell_len + 2 + badge_width <= width:
+                        gap = width - line.cell_len - badge_width
+                        line.append(" " * gap)
                         line.append(
                             badge,
                             style=f"bold {palette.warning}" if keep_tokens else "bold",
@@ -1465,7 +1474,26 @@ class PickerApp(App[Result | None]):
                 self._append_field(
                     text, "tabs", tabs, palette, width, style=palette.foreground
                 )
-                if ws.agents:
+                if ws.sessions:
+                    for idx, session in enumerate(ws.sessions):
+                        key = "agents" if idx == 0 else ""
+                        label_part = f"{agent_icon(session.agent)} {session.agent}"
+                        if session.status and session.status != "unknown":
+                            label_part += f" ({session.status})"
+                        value = (
+                            f"{label_part}  {session.title}"
+                            if session.title
+                            else label_part
+                        )
+                        self._append_field(
+                            text,
+                            key,
+                            value,
+                            palette,
+                            width,
+                            style=f"bold {palette.warning}",
+                        )
+                elif ws.agents:
                     agent_str = ", ".join(
                         f"{agent_icon(agent)} {agent}" for agent in ws.agents
                     )
@@ -1640,7 +1668,31 @@ class PickerApp(App[Result | None]):
                     }
                 )
             )
-            ws_infos.append(WorkspaceInfo(workspace_id=workspace_id, tabs=tabs, agents=agents))
+            sessions: list[SessionInfo] = []
+            for pane in panes:
+                if pane.get("workspace_id") != workspace_id or pane.get("agent") is None:
+                    continue
+                tokens = pane.get("tokens")
+                title = ""
+                if isinstance(tokens, dict):
+                    title = str(tokens.get("tl") or "").strip()
+                if not title:
+                    title = str(pane.get("terminal_title_stripped") or "").strip()
+                sessions.append(
+                    SessionInfo(
+                        agent=str(pane.get("agent")),
+                        status=str(pane.get("agent_status") or "").strip(),
+                        title=title,
+                    )
+                )
+            ws_infos.append(
+                WorkspaceInfo(
+                    workspace_id=workspace_id,
+                    tabs=tabs,
+                    agents=agents,
+                    sessions=tuple(sessions),
+                )
+            )
         data = PreviewData(
             path=path,
             label=label,

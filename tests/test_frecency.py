@@ -178,10 +178,14 @@ class FrecencyTest(unittest.TestCase):
             result,
             {"/tmp/repo": ("codex", "copilot"), "/tmp/app": ("copilot",)},
         )
-        self.assertEqual(format_agent_badges(("copilot",)), f"{agent_icon('copilot')} copilot")
+        self.assertEqual(format_agent_badges(("copilot",)), agent_icon("copilot"))
         self.assertEqual(
             format_agent_badges(("claude", "copilot", "pi")),
             f"{agent_icon('claude')} {agent_icon('copilot')} {agent_icon('pi')}",
+        )
+        self.assertEqual(
+            format_agent_badges(("copilot", "pi", "pi")),
+            f"{agent_icon('copilot')} 2*{agent_icon('pi')}",
         )
 
 

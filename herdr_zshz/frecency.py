@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import time
+from collections import Counter
 from pathlib import Path
 
 from .config import normalize_path, workspace_label
@@ -48,14 +49,15 @@ def agent_icon(name: str) -> str:
 
 
 def format_agent_badges(agents: tuple[str, ...]) -> str:
-    """Format one agent as ``<icon> <name>`` or multiple agents as space-separated icons."""
+    """Format active agents as compact icons with counts (e.g. ``2*π``)."""
 
     if not agents:
         return ""
-    if len(agents) == 1:
-        name = agents[0]
-        return f"{agent_icon(name)} {name}"
-    return " ".join(agent_icon(name) for name in agents)
+    parts: list[str] = []
+    for name, count in Counter(agents).items():
+        icon = agent_icon(name)
+        parts.append(f"{count}*{icon}" if count > 1 else icon)
+    return " ".join(parts)
 
 
 def data_path() -> Path:
@@ -207,10 +209,10 @@ def agents_by_path(
     saved_mapping: dict[str, str],
     names: dict[str, str],
 ) -> dict[str, tuple[str, ...]]:
-    """Map open workspace paths to sorted unique active agent names."""
+    """Map open workspace paths to sorted active agent names (preserving counts)."""
 
     live = {w.get("workspace_id"): w.get("label") for w in workspaces}
-    ws_agents: dict[str, set[str]] = {}
+    ws_agents: dict[str, list[str]] = {}
     ws_cwds: dict[str, set[str]] = {}
     for pane in panes:
         ws_id = pane.get("workspace_id")
@@ -221,20 +223,20 @@ def agents_by_path(
             ws_cwds.setdefault(str(ws_id), set()).add(cwd)
         agent = pane.get("agent")
         if agent is not None:
-            ws_agents.setdefault(str(ws_id), set()).add(str(agent))
+            ws_agents.setdefault(str(ws_id), []).append(str(agent))
 
-    by_path: dict[str, set[str]] = {}
+    by_path: dict[str, list[str]] = {}
     for ws_id, label in live.items():
         if not ws_id or str(ws_id) not in ws_agents:
             continue
         agents = ws_agents[str(ws_id)]
         mapped = saved_mapping.get(ws_id)
         if mapped and workspace_label(mapped, names) == label:
-            by_path.setdefault(mapped, set()).update(agents)
+            by_path.setdefault(mapped, []).extend(agents)
             continue
         for cwd in ws_cwds.get(str(ws_id), ()):
             if workspace_label(cwd, names) == label:
-                by_path.setdefault(cwd, set()).update(agents)
+                by_path.setdefault(cwd, []).extend(agents)
     return {path: tuple(sorted(agents)) for path, agents in by_path.items()}
 
 

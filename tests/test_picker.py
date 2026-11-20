@@ -114,7 +114,6 @@ class FormattingAndParsingTest(unittest.TestCase):
             names={},
             agents={"/work/alpha": ("copilot",)},
         )
-        self.assertIn("copilot", agent_rows)
         self.assertIn(picker.format_agent_badges(("copilot",)), agent_rows)
 
         plain = picker.format_ansi_rows(

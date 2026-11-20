@@ -21,6 +21,7 @@ from herdr_zshz.tui import (
     PickerApp,
     PreviewData,
     SelectWorkspaceModal,
+    SessionInfo,
     ThemePickerModal,
     WorkspaceInfo,
     _parse_git_log,
@@ -526,7 +527,10 @@ class CloseTest(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(100, 24)) as pilot:
             await pilot.pause()
             rendered = str(app.row_list._build_text())
-            self.assertIn(format_agent_badges(("copilot", "codex")), rendered)
+            badge = format_agent_badges(("copilot", "codex"))
+            self.assertIn(badge, rendered)
+            first_line = rendered.splitlines()[0]
+            self.assertTrue(first_line.endswith(badge), repr(first_line))
 
             # Toggle open-workspaces-only scope with alt+o and back
             await pilot.press("alt+o")
@@ -1130,7 +1134,17 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             app.preview_data = PreviewData(
                 path=self.repo,
                 label="repo",
-                workspaces=(WorkspaceInfo("w1", tabs=("t1", "t2"), agents=("copilot",)),),
+                workspaces=(
+                    WorkspaceInfo(
+                        "w1",
+                        tabs=("t1", "t2"),
+                        agents=("copilot",),
+                        sessions=(
+                            SessionInfo("copilot", "idle", "Fix auth bug"),
+                            SessionInfo("pi", "working", "Review PR #42"),
+                        ),
+                    ),
+                ),
                 git=GitInfo(
                     branch="main",
                     staged=1,
@@ -1151,7 +1165,8 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
                 self.repo,
                 "Current workspace (w1)",
                 "tabs    t1, t2",
-                f"agents  {agent_icon('copilot')} copilot",
+                f"agents  {agent_icon('copilot')} copilot (idle)  Fix auth bug",
+                f"{agent_icon('pi')} pi (working)  Review PR #42",
                 "\u2387 main  worktree  +1 ~2 ?1  \u21911",
                 "a1b2c3d 2h ago",
                 "d4e5f6a 1d ago",

@@ -9,7 +9,7 @@ uv sync
 make check   # compile, ruff, and the unit tests
 ```
 
-`make check` is the same command CI runs on Python 3.10, 3.12, and 3.13.
+`make check` is the same command CI runs on Python 3.10, 3.12, and 3.13. Commands, screenshots, and the code layout are in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Pull requests
 

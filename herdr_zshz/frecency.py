@@ -1,8 +1,10 @@
-"""zsh-z data parsing, frecency ranking and picker bucket ordering."""
+"""zsh-z and zoxide data parsing, frecency ranking and picker bucket ordering."""
 
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -27,11 +29,28 @@ def score(rank: float, timestamp: float, now: float) -> float:
     return 10000 * rank * (3.75 / ((0.0001 * (now - timestamp) + 1) + 0.25))
 
 
-def read_history(path: Path | None = None, now: float | None = None) -> list[str]:
-    """Return existing directories from the z data file, best rank first."""
+def read_zoxide_history() -> list[str]:
+    """Return existing directories from ``zoxide query -l``, best rank first."""
 
-    path = path or data_path()
-    now = time.time() if now is None else now
+    binary = shutil.which("zoxide")
+    if not binary:
+        return []
+    try:
+        completed = subprocess.run(
+            [binary, "query", "-l"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if completed.returncode != 0:
+        return []
+    return [line for line in completed.stdout.splitlines() if line]
+
+
+def _read_zshz_history(path: Path, now: float) -> list[str]:
     try:
         lines = path.read_text(errors="replace").splitlines()
     except OSError:
@@ -49,6 +68,22 @@ def read_history(path: Path | None = None, now: float | None = None) -> list[str
         ranked.append((score(rank, timestamp, now), fields[0]))
     ranked.sort(key=lambda entry: -entry[0])
     return [entry[1] for entry in ranked]
+
+
+def read_history(
+    path: Path | None = None,
+    now: float | None = None,
+    source: str = "auto",
+) -> list[str]:
+    """Return directories from zsh-z and/or zoxide, best rank first."""
+
+    if source == "zoxide":
+        return read_zoxide_history()
+    now = time.time() if now is None else now
+    entries = _read_zshz_history(path or data_path(), now)
+    if entries or source == "zshz" or path is not None:
+        return entries
+    return read_zoxide_history()
 
 
 def git_root(path: str) -> str | None:
@@ -122,6 +157,64 @@ def current_project(
     return current
 
 
+def agents_by_path(
+    workspaces: list[dict],
+    panes: list[dict],
+    saved_mapping: dict[str, str],
+    names: dict[str, str],
+) -> dict[str, tuple[str, ...]]:
+    """Map open workspace paths to sorted unique active agent names."""
+
+    live = {w.get("workspace_id"): w.get("label") for w in workspaces}
+    ws_agents: dict[str, set[str]] = {}
+    ws_cwds: dict[str, set[str]] = {}
+    for pane in panes:
+        ws_id = pane.get("workspace_id")
+        if not ws_id:
+            continue
+        cwd = pane.get("cwd")
+        if cwd:
+            ws_cwds.setdefault(str(ws_id), set()).add(cwd)
+        agent = pane.get("agent")
+        if agent is not None:
+            ws_agents.setdefault(str(ws_id), set()).add(str(agent))
+
+    by_path: dict[str, set[str]] = {}
+    for ws_id, label in live.items():
+        if not ws_id or str(ws_id) not in ws_agents:
+            continue
+        agents = ws_agents[str(ws_id)]
+        mapped = saved_mapping.get(ws_id)
+        if mapped and workspace_label(mapped, names) == label:
+            by_path.setdefault(mapped, set()).update(agents)
+            continue
+        for cwd in ws_cwds.get(str(ws_id), ()):
+            if workspace_label(cwd, names) == label:
+                by_path.setdefault(cwd, set()).update(agents)
+    return {path: tuple(sorted(agents)) for path, agents in by_path.items()}
+
+
+def _cached_git_root(path: str, cache: dict[str, str | None]) -> str | None:
+    current = normalize_path(path)
+    visited: list[str] = []
+    found: str | None = None
+    while current and current != "/":
+        if current in cache:
+            found = cache[current]
+            break
+        visited.append(current)
+        if os.path.exists(os.path.join(current, ".git")):
+            found = current
+            break
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    for entry in visited:
+        cache[entry] = found
+    return found
+
+
 def rank_paths(
     history: list[str],
     current: str | None,
@@ -133,6 +226,7 @@ def rank_paths(
     all_paths: list[str] = []
     git_paths: list[str] = []
     in_git: set[str] = set()
+    root_cache: dict[str, str | None] = {}
     if current:
         all_paths.append(current)
         git_paths.append(current)
@@ -144,7 +238,7 @@ def rank_paths(
         if directory in opened:
             root = directory
         else:
-            root = git_root(directory)
+            root = _cached_git_root(directory, root_cache)
             if root is None:
                 continue
         if root in in_git:

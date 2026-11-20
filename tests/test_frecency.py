@@ -1,10 +1,13 @@
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from herdr_zshz import frecency
 from herdr_zshz.frecency import (
+    agents_by_path,
     current_project,
     data_path,
     display_path,
@@ -142,6 +145,37 @@ class FrecencyTest(unittest.TestCase):
     def test_constant_marks(self):
         self.assertEqual(frecency.CURRENT_MARK, "◆")
         self.assertEqual(frecency.OPEN_MARK, "●")
+
+    def test_read_history_zoxide_fallback_and_explicit_source(self):
+        missing = self.root / "missing-z"
+        fake_result = subprocess.CompletedProcess(
+            ["zoxide", "query", "-l"], 0, stdout="/zox/one\n/zox/two\n", stderr=""
+        )
+        with (
+            mock.patch.dict(os.environ, {"ZSHZ_DATA": str(missing)}),
+            mock.patch("shutil.which", return_value="/usr/bin/zoxide"),
+            mock.patch("subprocess.run", return_value=fake_result),
+        ):
+            self.assertEqual(read_history(source="auto"), ["/zox/one", "/zox/two"])
+            self.assertEqual(read_history(source="zshz"), [])
+            self.assertEqual(read_history(source="zoxide"), ["/zox/one", "/zox/two"])
+
+    def test_agents_by_path_collects_mapped_and_unmapped_agents(self):
+        workspaces = [
+            {"workspace_id": "w1", "label": "repo"},
+            {"workspace_id": "w2", "label": "app"},
+        ]
+        panes = [
+            {"workspace_id": "w1", "cwd": "/tmp/repo/sub", "agent": "copilot"},
+            {"workspace_id": "w1", "cwd": "/tmp/repo", "agent": "codex"},
+            {"workspace_id": "w2", "cwd": "/tmp/app", "agent": "copilot"},
+            {"workspace_id": "w2", "cwd": "/tmp/app", "agent": None},
+        ]
+        result = agents_by_path(workspaces, panes, {"w1": "/tmp/repo"}, {})
+        self.assertEqual(
+            result,
+            {"/tmp/repo": ("codex", "copilot"), "/tmp/app": ("copilot",)},
+        )
 
 
 if __name__ == "__main__":

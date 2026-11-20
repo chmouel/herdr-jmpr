@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .config import NamesError, load_names, workspace_label
@@ -316,6 +317,13 @@ def jump(
     return 0
 
 
+def _fetch_herdr_state(herdr: Herdr) -> tuple[list[dict], list[dict]]:
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        ws_future = pool.submit(herdr.workspaces)
+        panes_future = pool.submit(herdr.panes)
+        return ws_future.result(), panes_future.result()
+
+
 def interactive(
     move_mode: str | None,
     show_all: bool,
@@ -330,8 +338,7 @@ def interactive(
     directory.mkdir(parents=True, exist_ok=True)
     path = state_file(socket)
     instance = socket_instance(socket)
-    workspaces = herdr.workspaces()
-    panes = herdr.panes()
+    workspaces, panes = _fetch_herdr_state(herdr)
     state = read_mapping(path)
     mapping = (
         dict(state["workspaces"]) if state.get("instance") == instance else {}
@@ -339,7 +346,7 @@ def interactive(
     pane_id = active_pane_id()
     opened = open_paths(workspaces, panes, mapping, names)
     current = current_project(pane_id, panes, workspaces, mapping, names)
-    history = read_history()
+    history = read_history(source=settings.history)
     paths_git = rank_paths(history, current, opened, False)
     paths_all = rank_paths(history, current, opened, True)
     mapping_reader = lambda: read_live_mapping(path, instance)  # noqa: E731
@@ -423,13 +430,12 @@ def _refresh_row_files(
     all_file = Path(all_env)
     if not git_file.parent.is_dir() or not all_file.parent.is_dir():
         return
-    workspaces = herdr.workspaces()
-    panes = herdr.panes()
+    workspaces, panes = _fetch_herdr_state(herdr)
     mapping = read_live_mapping(path, instance)
     pane_id = active_pane_id()
     opened = open_paths(workspaces, panes, mapping, names)
     current = current_project(pane_id, panes, workspaces, mapping, names)
-    history = read_history()
+    history = read_history(source=load_settings().history)
     write_row_files(
         git_file,
         all_file,

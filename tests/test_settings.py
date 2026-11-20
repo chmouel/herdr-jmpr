@@ -33,6 +33,18 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(loaded.backend, "textual")
         self.assertEqual(loaded.start_mode, "insert")
         self.assertEqual(loaded.theme, "auto")
+        self.assertEqual(loaded.history, "auto")
+
+    def test_history_values_and_validation(self):
+        for source in ("auto", "zshz", "zoxide"):
+            with self.subTest(source=source):
+                self.write(f'history = "{source}"\n')
+                self.assertEqual(load_settings(self.path).history, source)
+
+        self.write('history = "fasd"\n')
+        with self.assertRaises(SettingsError) as caught:
+            load_settings(self.path)
+        self.assertIn("history must be one of", str(caught.exception))
 
     def test_backend_values_and_validation(self):
         for backend in ("auto", "fzf", "skim", "gum", "textual"):

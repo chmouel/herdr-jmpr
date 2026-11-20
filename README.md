@@ -1,9 +1,30 @@
 # herdr-jmpr
 
+[![CI](https://github.com/chmouel/herdr-jmpr/actions/workflows/ci.yml/badge.svg)](https://github.com/chmouel/herdr-jmpr/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![Herdr >= 0.9.0](https://img.shields.io/badge/herdr-%3E%3D%200.9.0-B48EF7)](https://herdr.dev)
+[![Ruff](https://img.shields.io/badge/code%20style-ruff-D7FF64?logo=ruff&logoColor=black)](https://docs.astral.sh/ruff/)
+[![License: MIT](https://img.shields.io/github/license/chmouel/herdr-jmpr)](LICENSE)
+
 Jump to project workspaces in [Herdr](https://herdr.dev), ranked by your `zsh-z`
 history. The default picker is a Textual app with fzf-style search, vim normal
 mode, a live preview, and a tree of each workspace's tabs with agent status.
 `fzf`, `skim` (`sk`), and `gum` work as alternatives.
+
+![The Textual picker showing open workspaces with their tabs and agents](docs/screenshots/picker-tree.png)
+
+## Screenshots
+
+| Search with highlighted matches | Vim normal mode with yanked tabs |
+| --- | --- |
+| ![Search](docs/screenshots/picker-search.png) | ![Yank and paste](docs/screenshots/picker-yank.png) |
+
+| Theme: Dracula |
+| --- |
+| ![Dracula theme](docs/screenshots/picker-dracula.png) |
+
+The images come from `scripts/screenshots.py`, which runs against demo
+repositories, so no real paths show up in them.
 
 ## Install
 
@@ -222,7 +243,11 @@ make test     # uv run python -m unittest discover -s tests -v
 make lint     # ruff
 make compile  # byte-compile the package
 make link     # herdr plugin link .
+uv run python scripts/screenshots.py   # regenerate docs/screenshots (PNG needs rsvg-convert)
 ```
+
+CI runs `make check` on Python 3.10, 3.12, and 3.13. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the workflow.
 
 Layout:
 
@@ -235,6 +260,10 @@ Layout:
 - `herdr_jmpr/picker.py`: backend resolution and the `fzf`, `skim`, and `gum` runners
 - `herdr_jmpr/tui.py`: Textual picker, tab tree, modals, and preview
 - `herdr_jmpr/cli.py`: flags, `open-picker`, lock transaction, and moves
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

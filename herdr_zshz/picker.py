@@ -17,6 +17,7 @@ from .config import workspace_label
 from .frecency import (
     CURRENT_MARK,
     OPEN_MARK,
+    agents_by_path,
     current_project,
     display_path,
     open_paths,
@@ -35,6 +36,7 @@ BACKEND_BINARIES = {
 
 GIT_ROWS_ENV = "HERDR_ZSHZ_GIT_ROWS"
 ALL_ROWS_ENV = "HERDR_ZSHZ_ALL_ROWS"
+OPEN_ROWS_ENV = "HERDR_ZSHZ_OPEN_ROWS"
 HELP_ENV = "HERDR_ZSHZ_HELP"
 BACKEND_ENV = "HERDR_ZSHZ_BACKEND"
 
@@ -43,6 +45,7 @@ HELP_TEXT = (
     "alt-p   move the current pane there\n"
     "alt-t   move the current tab there\n"
     "alt-a   switch between git roots and all dirs\n"
+    "alt-o   toggle open workspaces only\n"
     "ctrl-x  close the project's workspace\n"
     "ctrl-h  toggle this help"
 )
@@ -123,12 +126,16 @@ def format_ansi_row(
     names: dict[str, str],
     *,
     include_target: bool = True,
+    agents: tuple[str, ...] = (),
 ) -> str:
     shown = display_path(path)
     label = workspace_label(path, names)
     base = os.path.basename(path.rstrip("/")) or path
     if label != base:
         shown += f"  \033[2m[{label}]\033[0m"
+    if agents:
+        badge = f"⚡ {agents[0]}" if len(agents) == 1 else f"⚡ {agents[0]} +{len(agents) - 1}"
+        shown += f"  \033[33m{badge}\033[0m"
     if path == current:
         prefix = f"\033[33m{CURRENT_MARK}\033[0m "
     elif path in opened:
@@ -146,16 +153,37 @@ def format_ansi_rows(
     names: dict[str, str],
     *,
     include_target: bool = True,
+    agents: dict[str, tuple[str, ...]] | None = None,
 ) -> str:
     if not paths:
         return ""
+    agent_map = agents or {}
     return (
         "\n".join(
-            format_ansi_row(path, current, opened, names, include_target=include_target)
+            format_ansi_row(
+                path,
+                current,
+                opened,
+                names,
+                include_target=include_target,
+                agents=agent_map.get(path, ()),
+            )
             for path in paths
         )
         + "\n"
     )
+
+
+def _open_only_paths(
+    paths_all: list[str], current: str | None, opened: set[str]
+) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for path in paths_all:
+        if (path == current or path in opened) and path not in seen:
+            seen.add(path)
+            result.append(path)
+    return result
 
 
 def write_row_files(
@@ -166,9 +194,26 @@ def write_row_files(
     current: str | None,
     opened: set[str],
     names: dict[str, str],
+    *,
+    open_file: Path | None = None,
+    agents: dict[str, tuple[str, ...]] | None = None,
 ) -> None:
-    git_file.write_text(format_ansi_rows(paths_git, current, opened, names))
-    all_file.write_text(format_ansi_rows(paths_all, current, opened, names))
+    git_file.write_text(
+        format_ansi_rows(paths_git, current, opened, names, agents=agents)
+    )
+    all_file.write_text(
+        format_ansi_rows(paths_all, current, opened, names, agents=agents)
+    )
+    if open_file is not None:
+        open_file.write_text(
+            format_ansi_rows(
+                _open_only_paths(paths_all, current, opened),
+                current,
+                opened,
+                names,
+                agents=agents,
+            )
+        )
 
 
 def resolve_typed_or_picked(query: str, picked_path: str) -> str | None:
@@ -361,6 +406,7 @@ def run_fzf(
     src_pane: str,
     herdr: Herdr,
     mapping_reader: Callable[[], dict[str, str]],
+    agents: dict[str, tuple[str, ...]] | None = None,
 ) -> Result | None:
     """Run the fzf picker."""
 
@@ -368,7 +414,18 @@ def run_fzf(
     with tempfile.TemporaryDirectory(prefix="herdr-zshz-") as temp_dir:
         git_file = Path(temp_dir) / "git.rows"
         all_file = Path(temp_dir) / "all.rows"
-        write_row_files(git_file, all_file, paths_git, paths_all, current, opened, names)
+        open_file = Path(temp_dir) / "open.rows"
+        write_row_files(
+            git_file,
+            all_file,
+            paths_git,
+            paths_all,
+            current,
+            opened,
+            names,
+            open_file=open_file,
+            agents=agents,
+        )
         rows_file = all_file if show_all else git_file
         prompt = "all> " if show_all else "git> "
         toggle = (
@@ -378,9 +435,18 @@ def run_fzf(
             f'echo \'reload(cat "${ALL_ROWS_ENV}")+change-prompt(all> )\'; '
             "fi"
         )
+        toggle_open = (
+            'if [ "$FZF_PROMPT" = "open> " ]; then '
+            f'echo \'reload(cat "${GIT_ROWS_ENV}")+change-prompt(git> )\'; '
+            "else "
+            f'echo \'reload(cat "${OPEN_ROWS_ENV}")+change-prompt(open> )\'; '
+            "fi"
+        )
         refresh = (
             'if [ "$FZF_PROMPT" = "all> " ]; then '
             f'echo \'reload(cat "${ALL_ROWS_ENV}")\'; '
+            'elif [ "$FZF_PROMPT" = "open> " ]; then '
+            f'echo \'reload(cat "${OPEN_ROWS_ENV}")\'; '
             "else "
             f'echo \'reload(cat "${GIT_ROWS_ENV}")\'; '
             "fi"
@@ -396,11 +462,13 @@ def run_fzf(
             "--bind",
             f"alt-a:transform:{toggle}",
             "--bind",
+            f"alt-o:transform:{toggle_open}",
+            "--bind",
             f"ctrl-x:execute({close_cmd} {{2}})+transform:{refresh}",
             "--preview",
             f'printf "%s\\n" "${HELP_ENV}"',
             "--preview-window",
-            "hidden,down,6,border-top",
+            "hidden,down,7,border-top",
             "--bind",
             "ctrl-h:toggle-preview",
             "--delimiter",
@@ -417,6 +485,7 @@ def run_fzf(
             {
                 GIT_ROWS_ENV: str(git_file),
                 ALL_ROWS_ENV: str(all_file),
+                OPEN_ROWS_ENV: str(open_file),
                 HELP_ENV: HELP_TEXT,
             }
         )
@@ -460,22 +529,31 @@ def run_skim(
     mapping_reader: Callable[[], dict[str, str]],
     history: list[str],
     close_callback: Callable[[str], int],
+    agents: dict[str, tuple[str, ...]] | None = None,
 ) -> Result | None:
     """Run the skim (``sk``) picker with Python-driven toggle and close actions."""
 
     binary_path = shutil.which("sk") or "sk"
-    active_all = show_all
+    scope = "all" if show_all else "git"
+    previous_scope = scope
     cur_project = current
     cur_opened = set(opened)
+    cur_agents = dict(agents) if agents else {}
     git_list = list(paths_git)
     all_list = list(paths_all)
     initial_query = ""
 
     while True:
+        if scope == "open":
+            active_paths = _open_only_paths(all_list, cur_project, cur_opened)
+        elif scope == "all":
+            active_paths = all_list
+        else:
+            active_paths = git_list
         rows = format_ansi_rows(
-            all_list if active_all else git_list, cur_project, cur_opened, names
+            active_paths, cur_project, cur_opened, names, agents=cur_agents
         )
-        prompt = "all> " if active_all else "git> "
+        prompt = f"{scope}> "
         args = [
             binary_path,
             "--layout",
@@ -489,7 +567,7 @@ def run_skim(
             "--preview",
             f'printf "%s\\n" "${HELP_ENV}"',
             "--preview-window",
-            "down:6:hidden",
+            "down:7:hidden",
             "--bind",
             "ctrl-h:toggle-preview",
             "--delimiter",
@@ -498,7 +576,7 @@ def run_skim(
             "1",
             "--print-query",
             "--expect",
-            "alt-p,alt-t,alt-a,ctrl-x",
+            "alt-p,alt-t,alt-a,alt-o,ctrl-x",
             "--no-sort",
             "-e",
         ]
@@ -515,7 +593,16 @@ def run_skim(
             return None
         query, key, picked_path = parse_query_expect_output(completed.stdout)
         if key == "alt-a":
-            active_all = not active_all
+            scope = "git" if scope == "all" else "all"
+            previous_scope = scope
+            initial_query = query
+            continue
+        if key == "alt-o":
+            if scope == "open":
+                scope = previous_scope
+            else:
+                previous_scope = scope
+                scope = "open"
             initial_query = query
             continue
         if key == "ctrl-x":
@@ -526,6 +613,7 @@ def run_skim(
                 mapping = mapping_reader()
                 cur_opened = open_paths(workspaces, panes, mapping, names)
                 cur_project = current_project(src_pane, panes, workspaces, mapping, names)
+                cur_agents = agents_by_path(workspaces, panes, mapping, names)
                 git_list = rank_paths(history, cur_project, cur_opened, False)
                 all_list = rank_paths(history, cur_project, cur_opened, True)
             initial_query = query
@@ -556,16 +644,25 @@ def run_gum(
     src_pane: str,
     herdr: Herdr,
     mapping_reader: Callable[[], dict[str, str]],
+    agents: dict[str, tuple[str, ...]] | None = None,
 ) -> Result | None:
     """Run ``gum filter`` with ANSI labels and typed-directory support."""
 
     binary_path = shutil.which("gum") or "gum"
     paths = paths_all if show_all else paths_git
+    agent_map = agents or {}
     by_raw: dict[str, str] = {}
     by_plain: dict[str, str] = {}
     lines: list[str] = []
     for path in paths:
-        line = format_ansi_row(path, current, opened, names, include_target=False)
+        line = format_ansi_row(
+            path,
+            current,
+            opened,
+            names,
+            include_target=False,
+            agents=agent_map.get(path, ()),
+        )
         lines.append(line)
         by_raw[line] = path
         by_plain[ANSI_RE.sub("", line)] = path

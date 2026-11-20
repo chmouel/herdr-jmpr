@@ -23,6 +23,7 @@ from .config import workspace_label
 from .frecency import (
     CURRENT_MARK,
     OPEN_MARK,
+    agents_by_path,
     current_project,
     display_path,
     open_paths,
@@ -147,6 +148,7 @@ class Row:
     shown: str
     marker: str
     label: str
+    agents: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -430,12 +432,46 @@ class RowList(Static):
                     line.stylize(match_style, offset + start, offset + end)
 
             if width:
+                line.truncate(width, overflow="ellipsis", pad=False)
+            if row.agents:
+                badge = (
+                    f"\u26a1 {row.agents[0]}"
+                    if len(row.agents) == 1
+                    else f"\u26a1 {row.agents[0]} +{len(row.agents) - 1}"
+                )
+                badge_text = f"  {badge}"
+                if width:
+                    room = width - cell_len(badge_text)
+                    if room > 6 and line.cell_len > room:
+                        line.truncate(room, overflow="ellipsis", pad=False)
+                    if line.cell_len + cell_len(badge_text) <= width:
+                        line.append("  ")
+                        line.append(
+                            badge,
+                            style=f"bold {palette.warning}" if keep_tokens else "bold",
+                        )
+                else:
+                    line.append("  ")
+                    line.append(
+                        badge,
+                        style=f"bold {palette.warning}" if keep_tokens else "bold",
+                    )
+            if width:
                 line.truncate(width, overflow="ellipsis", pad=selected)
             if selected:
                 line.stylize(self.selected_row_style)
             text.append_text(line)
             text.append("\n")
         return text
+
+    def on_click(self, event: events.Click) -> None:
+        if not self.rows or event.button != 1:
+            return
+        index = event.y
+        if 0 <= index < len(self.rows):
+            selector = getattr(self.app, "select_row_at", None)
+            if callable(selector):
+                selector(index, activate=event.chain >= 2)
 
 
 class ConfirmCloseModal(ModalScreen[bool]):
@@ -561,7 +597,9 @@ HELP_GROUPS = [
             ("alt-p", "move pane here"),
             ("alt-t", "move tab here"),
             ("alt-a", "git / all dirs"),
+            ("alt-o", "open workspaces"),
             ("alt-v", "toggle preview"),
+            ("ctrl-t", "switch theme"),
             ("ctrl-x", "close workspace"),
             ("? ctrl-h", "toggle help"),
         ],
@@ -586,7 +624,9 @@ HELP_GROUPS = [
             ("H M L", "top / mid / bottom"),
             ("i a /", "insert mode"),
             ("dd", "clear query"),
+            ("o", "open workspaces"),
             ("v", "toggle preview"),
+            ("T", "switch theme"),
             ("x", "close workspace"),
             ("p t", "move pane / tab"),
             ("q", "quit"),
@@ -657,6 +697,77 @@ class HelpModal(ModalScreen[None]):
         self.dismiss(None)
 
 
+class ThemePickerModal(ModalScreen[str | None]):
+    def __init__(self, themes: list[str], current_theme: str):
+        super().__init__()
+        self.themes = themes
+        self.original_theme = current_theme
+        self.index = themes.index(current_theme) if current_theme in themes else 0
+
+    def _palette(self) -> Palette:
+        getter = getattr(self.app, "palette", None)
+        if callable(getter):
+            return getter()
+        return Palette("cyan", "cyan", "yellow", "green", "red", "", "dim", None)
+
+    def _selection_style(self) -> str:
+        style = getattr(self.app, "selection_style", None)
+        return style() if callable(style) else "bold reverse"
+
+    def _theme_text(self) -> Text:
+        palette = self._palette()
+        row_style = self._selection_style()
+        tinted = row_style.startswith("on ")
+        text = Text()
+        width = max((cell_len(name) + 6 for name in self.themes), default=28)
+        for index, name in enumerate(self.themes):
+            line = Text()
+            selected = index == self.index
+            active = name == self.original_theme
+            if selected:
+                pointer_style = f"bold {palette.primary}" if tinted else "bold"
+                label_style = f"bold {palette.foreground}".strip() if tinted else ""
+                line.append("\u258c ", style=pointer_style)
+                line.append(name, style=label_style)
+                if active:
+                    line.append("  \u25cf", style=f"bold {palette.success}" if tinted else "")
+                line.truncate(width, pad=True)
+                line.stylize(row_style)
+            else:
+                line.append("  " + name, style=palette.foreground)
+                if active:
+                    line.append("  \u25cf", style=palette.success)
+            text.append_text(line)
+            if index < len(self.themes) - 1:
+                text.append("\n")
+        return text
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="theme-scroll"):
+            panel = Static(self._theme_text(), id="theme-picker")
+            panel.border_title = " Switch theme (Esc revert) "
+            yield panel
+
+    def _preview_theme(self) -> None:
+        chosen = self.themes[self.index]
+        self.app.theme = chosen
+        self.query_one("#theme-picker", Static).update(self._theme_text())
+
+    def on_key(self, event: events.Key) -> None:
+        event.stop()
+        if event.key in ("escape", "q"):
+            self.app.theme = self.original_theme
+            self.dismiss(None)
+        elif event.key in ("down", "j", "ctrl+n", "tab"):
+            self.index = (self.index + 1) % len(self.themes)
+            self._preview_theme()
+        elif event.key in ("up", "k", "ctrl+p"):
+            self.index = (self.index - 1) % len(self.themes)
+            self._preview_theme()
+        elif event.key in ("enter", "space"):
+            self.dismiss(self.themes[self.index])
+
+
 class PickerApp(App[Result | None]):
     TITLE = "herdr-zshz"
 
@@ -697,11 +808,11 @@ class PickerApp(App[Result | None]):
         padding: 0 2;
         border-top: solid $panel;
     }
-    ConfirmCloseModal, SelectWorkspaceModal, HelpModal {
+    ConfirmCloseModal, SelectWorkspaceModal, HelpModal, ThemePickerModal {
         align: center middle;
         background: $background 68%;
     }
-    #confirm, #select, #help {
+    #confirm, #select, #help, #theme-picker {
         width: auto;
         max-width: 92%;
         height: auto;
@@ -710,8 +821,9 @@ class PickerApp(App[Result | None]):
         background: $surface;
     }
     #confirm { border: round $warning; }
-    #help-scroll { width: auto; height: auto; max-height: 100%; max-width: 92%; }
+    #help-scroll, #theme-scroll { width: auto; height: auto; max-height: 85%; max-width: 92%; }
     #help { padding: 0 2; max-width: 100%; }
+    #theme-picker { padding: 1 2; max-width: 100%; }
     """
 
     def __init__(
@@ -733,6 +845,7 @@ class PickerApp(App[Result | None]):
         theme_setting: str = "auto",
         workspaces: list[dict] | None = None,
         panes: list[dict] | None = None,
+        agents: dict[str, tuple[str, ...]] | None = None,
     ) -> None:
         super().__init__()
         self._ui_mounted = False
@@ -742,12 +855,18 @@ class PickerApp(App[Result | None]):
         self.opened = opened
         self.names = names
         self.move_mode = move_mode
-        self.show_all = show_all
+        self.scope = "all" if show_all else "git"
+        self._previous_scope = self.scope
         self.src_pane = src_pane
         self.herdr = herdr or Herdr()
         self.mapping_reader = mapping_reader or (lambda: {})
         self.strict_mapping_reader = strict_mapping_reader or self.mapping_reader
         self.history = history
+        self.agents: dict[str, tuple[str, ...]] = dict(agents) if agents else {}
+        if not self.agents and workspaces and panes:
+            self.agents = agents_by_path(
+                workspaces, panes, self.safe_mapping(), names
+            )
         self.mode = start_mode if start_mode in ("insert", "normal") else "insert"
         self.query = ""
         self.cursor = 0
@@ -880,8 +999,25 @@ class PickerApp(App[Result | None]):
 
     # -- rows -------------------------------------------------------------
 
+    @property
+    def show_all(self) -> bool:
+        return self.scope == "all"
+
+    @show_all.setter
+    def show_all(self, value: bool) -> None:
+        self.scope = "all" if value else "git"
+        self._previous_scope = self.scope
+
     def active_paths(self) -> list[str]:
-        return self.paths["all" if self.show_all else "git"]
+        if self.scope == "open":
+            seen: set[str] = set()
+            open_list: list[str] = []
+            for path in self.paths["all"]:
+                if (path == self.current or path in self.opened) and path not in seen:
+                    seen.add(path)
+                    open_list.append(path)
+            return open_list
+        return self.paths[self.scope]
 
     def build_rows(self) -> list[Row]:
         rows = []
@@ -898,7 +1034,15 @@ class PickerApp(App[Result | None]):
                 if path in self.opened
                 else " "
             )
-            rows.append(Row(path=path, shown=shown, marker=marker, label=label))
+            rows.append(
+                Row(
+                    path=path,
+                    shown=shown,
+                    marker=marker,
+                    label=label,
+                    agents=self.agents.get(path, ()),
+                )
+            )
         return rows
 
     def set_rows(self) -> None:
@@ -912,7 +1056,10 @@ class PickerApp(App[Result | None]):
                 f"  \u23ce  Open directory {display_path(typed)}",
                 f"bold {palette.success}",
             )
-        scope_tip = "type a path to open" if self.show_all else "press M-a for all dirs"
+        if self.scope == "open":
+            scope_tip = "no open workspaces \u00b7 press M-o for all"
+            return (f"  {scope_tip.capitalize()}", palette.muted)
+        scope_tip = "type a path to open" if self.scope == "all" else "press M-a for all dirs"
         return (f"  No matching workspaces \u00b7 {scope_tip}", palette.muted)
 
     def apply_filter(self, keep_selection: bool = False) -> None:
@@ -1083,11 +1230,11 @@ class PickerApp(App[Result | None]):
             line.append(" normal ", style=self.chip_style("secondary"))
             line.append(" ")
 
-        prompt = "all \u203a " if self.show_all else "git \u203a "
+        prompt = f"{self.scope} \u203a "
         line.append(prompt, style=f"bold {palette.primary}")
 
         count_text = f"{len(self.filtered)}/{len(self.rows)}"
-        scope_text = "[all]" if self.show_all else "[git]"
+        scope_text = f"[{self.scope}]"
         right = Text()
         right.append(count_text, style=palette.muted)
         right.append("  ")
@@ -1129,6 +1276,7 @@ class PickerApp(App[Result | None]):
                     ("\u23ce", "jump"),
                     ("M-p/t", "move"),
                     ("M-a", "scope"),
+                    ("M-o", "open"),
                     ("^X", "close"),
                     ("Esc", "normal"),
                     ("?", "help"),
@@ -1139,7 +1287,9 @@ class PickerApp(App[Result | None]):
                     ("M-p", "pane"),
                     ("M-t", "tab"),
                     ("M-a", scope_action),
+                    ("M-o", "open"),
                     ("M-v", "preview"),
+                    ("^T", "theme"),
                     ("^X", "close"),
                     ("Esc", "normal"),
                     ("?", "help"),
@@ -1641,6 +1791,7 @@ class PickerApp(App[Result | None]):
         mapping = self.safe_mapping()
         self.opened = open_paths(workspaces, panes, mapping, self.names)
         self.current = current_project(self.src_pane, panes, workspaces, mapping, self.names)
+        self.agents = agents_by_path(workspaces, panes, mapping, self.names)
         if self.history is not None:
             self.paths["git"] = rank_paths(self.history, self.current, self.opened, False)
             self.paths["all"] = rank_paths(self.history, self.current, self.opened, True)
@@ -1651,8 +1802,38 @@ class PickerApp(App[Result | None]):
     async def show_help(self) -> None:
         await self.push_screen_wait(HelpModal())
 
+    @work(exclusive=True)
+    async def open_theme_picker(self) -> None:
+        available = sorted(self.available_themes)
+        if "herdr-ink" in available:
+            available.remove("herdr-ink")
+            available.insert(0, "herdr-ink")
+        await self.push_screen_wait(ThemePickerModal(available, self.theme))
+
+    def select_row_at(self, index: int, *, activate: bool = False) -> None:
+        if not self.filtered:
+            return
+        self.set_index(index)
+        if activate:
+            self.accept()
+
     def toggle_all(self) -> None:
-        self.show_all = not self.show_all
+        if self.scope == "open":
+            self.scope = "all"
+        elif self.scope == "all":
+            self.scope = "git"
+        else:
+            self.scope = "all"
+        self._previous_scope = self.scope
+        self.index = 0
+        self.set_rows()
+
+    def toggle_open_scope(self) -> None:
+        if self.scope == "open":
+            self.scope = self._previous_scope if self._previous_scope in ("git", "all") else "git"
+        else:
+            self._previous_scope = self.scope
+            self.scope = "open"
         self.index = 0
         self.set_rows()
 
@@ -1768,7 +1949,9 @@ class PickerApp(App[Result | None]):
         "alt+p": lambda self: self.start_move("pane"),
         "alt+t": lambda self: self.start_move("tab"),
         "alt+a": lambda self: self.toggle_all(),
+        "alt+o": lambda self: self.toggle_open_scope(),
         "alt+v": lambda self: self.toggle_preview(),
+        "ctrl+t": lambda self: self.open_theme_picker(),
         "enter": lambda self: self.accept(),
     }
 
@@ -1792,10 +1975,11 @@ class PickerApp(App[Result | None]):
         "d": lambda self: self._start_pending("d"),
         "C": lambda self: (self.clear_query(), self.set_mode("insert")),
         "v": lambda self: self.toggle_preview(),
+        "T": lambda self: self.open_theme_picker(),
         "x": lambda self: self.close_current(),
         "p": lambda self: self.start_move("pane"),
         "t": lambda self: self.start_move("tab"),
-        "o": lambda self: self.accept(),
+        "o": lambda self: self.toggle_open_scope(),
         "l": lambda self: self.accept(),
         "?": lambda self: self.show_help(),
         "q": lambda self: self.exit(None),
@@ -1805,7 +1989,9 @@ class PickerApp(App[Result | None]):
         "alt+p": lambda self: self.start_move("pane"),
         "alt+t": lambda self: self.start_move("tab"),
         "alt+a": lambda self: self.toggle_all(),
+        "alt+o": lambda self: self.toggle_open_scope(),
         "alt+v": lambda self: self.toggle_preview(),
+        "ctrl+t": lambda self: self.open_theme_picker(),
         "enter": lambda self: self.accept(),
     }
 

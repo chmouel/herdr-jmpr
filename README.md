@@ -71,6 +71,10 @@ theme = "auto"
 # Textual initial mode: "insert" (default) filters as you type; "normal" starts
 # in the vim keymap, where you navigate with j/k and press i, a, or / to filter.
 start_mode = "insert"
+
+# History source: "auto" (default, prefers zsh-z and falls back to zoxide),
+# "zshz", or "zoxide".
+history = "auto"
 ```
 
 You can also override the backend per invocation with `--backend <name>` (both
@@ -87,10 +91,11 @@ different config without moving files.
   below.
 - `fzf` uses a reverse 16-color layout with `Enter` to jump, `alt-p` to move
   pane, `alt-t` to move tab, `alt-a` to toggle between `git>` and `all>`,
-  `ctrl-x` to close the selected workspace and reload live markers, and `ctrl-h`
-  to toggle the bottom help drawer.
-- `skim` (`sk`) supports the same `Enter`, `alt-p`, `alt-t`, `alt-a`, `ctrl-x`,
-  and `ctrl-h` bindings.
+  `alt-o` to toggle open workspaces only (`open>`), `ctrl-x` to close the
+  selected workspace and reload live markers, and `ctrl-h` to toggle the bottom
+  help drawer.
+- `skim` (`sk`) supports the same `Enter`, `alt-p`, `alt-t`, `alt-a`, `alt-o`,
+  `ctrl-x`, and `ctrl-h` bindings.
 - `gum` runs `gum filter` with frecency order preserved and typed-path support.
 
 ### Textual picker keys
@@ -127,17 +132,21 @@ Normal mode:
 | `dd` | clear the query |
 | `C` | clear the query and enter insert mode |
 | `x` | close the project workspace |
+| `o` | toggle open workspaces only |
 | `v` | toggle workspace preview |
+| `T` | switch theme live |
 | `p` / `t` | move pane / tab |
-| `o`, `l`, `enter` | accept the selection |
+| `l`, `enter` | accept the selection |
 | `?` | toggle help |
 | `q`, `escape` | quit |
 
 Both modes: `enter` jumps (a typed `/` or `~` path, or the query itself when it
 is an existing directory and nothing else matches, wins over the highlighted
 row), `alt+p` moves the pane, `alt+t` moves the tab, `alt+a` toggles the
-`git` / `all` scope, `alt+v` toggles the workspace preview, `ctrl+x` closes the
-project's workspace, `?` (normal mode) toggles help.
+`git` / `all` scope, `alt+o` toggles open workspaces only, `alt+v` toggles the
+workspace preview, `ctrl+t` opens the live theme switcher, `ctrl+x` closes the
+project's workspace, `?` (normal mode) toggles help. Mouse clicks select rows
+and double-clicking jumps immediately.
 
 Search follows fzf `-e` extended search: space separated clauses are ANDed,
 `|` separates OR alternatives inside a clause (`foo | bar baz`), and terms can
@@ -146,9 +155,9 @@ or forced to a plain substring (`'exact`). Rows keep their frecency order and
 matched substrings are highlighted.
 
 The active row carries a `▌` pointer over a subtle tinted highlight surface so
-directory paths, `[label]` tags, and fuzzy match underlines stay legible. Rows
-also show `◆` for the current project and `●` for projects whose workspace is
-already open.
+directory paths, `[label]` tags, `⚡` active-agent badges, and fuzzy match
+underlines stay legible. Rows also show `◆` for the current project and `●` for
+projects whose workspace is already open.
 
 ## How it decides where to go
 

@@ -21,6 +21,7 @@ from herdr_zshz.tui import (
     PickerApp,
     PreviewData,
     SelectWorkspaceModal,
+    ThemePickerModal,
     WorkspaceInfo,
     _parse_git_log,
     _parse_git_status_v2,
@@ -507,6 +508,55 @@ class CloseTest(unittest.IsolatedAsyncioTestCase):
             app._preview_loaded(self.repo, fresh_data, app._preview_generation)
             await pilot.pause()
             self.assertEqual(app._preview_cache[self.repo], fresh_data)
+
+    async def test_inline_agent_badges_and_open_scope_and_mouse_and_theme_picker(self):
+        closed_dir = str(self.root / "closed")
+        os.makedirs(closed_dir)
+        app = PickerApp(
+            paths_git=[self.repo, closed_dir],
+            paths_all=[self.repo, closed_dir],
+            current=self.repo,
+            opened={self.repo},
+            names={},
+            herdr=FakeHerdr(),
+            mapping_reader=lambda: {},
+            src_pane="A",
+            agents={self.repo: ("copilot", "codex")},
+        )
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            rendered = str(app.row_list._build_text())
+            self.assertIn("\u26a1 copilot +1", rendered)
+
+            # Toggle open-workspaces-only scope with alt+o and back
+            await pilot.press("alt+o")
+            self.assertEqual(app.scope, "open")
+            self.assertEqual([row.path for row in app.filtered], [self.repo])
+            await pilot.press("alt+o")
+            self.assertEqual(app.scope, "git")
+            self.assertEqual([row.path for row in app.filtered], [self.repo, closed_dir])
+
+            # Single click selects row 1
+            await pilot.click("#list", offset=(4, 1))
+            self.assertEqual(app.index, 1)
+
+            # Theme picker modal previews live and reverts on Escape
+            original_theme = app.theme
+            await pilot.press("ctrl+t")
+            await pilot.pause()
+            self.assertIsInstance(app.screen, ThemePickerModal)
+            await pilot.press("j")
+            await pilot.pause()
+            self.assertNotEqual(app.theme, original_theme)
+            await pilot.press("escape")
+            await pilot.pause()
+            self.assertEqual(app.theme, original_theme)
+
+            # Double-click on row 0 selects and accepts it
+            await pilot.click("#list", offset=(4, 0), times=2)
+            await pilot.pause()
+        self.assertIsNotNone(app.return_value)
+        self.assertEqual(app.return_value.path, self.repo)
 
 
 class ChoiceTest(unittest.IsolatedAsyncioTestCase):

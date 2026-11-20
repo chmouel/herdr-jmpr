@@ -107,6 +107,15 @@ class FormattingAndParsingTest(unittest.TestCase):
         self.assertNotIn("[beta]", rows[1])
         self.assertIn("\x1b[2m[Custom]\x1b[0m\t/work/gamma", rows[2])
 
+        agent_rows = picker.format_ansi_rows(
+            ["/work/alpha"],
+            current="/work/alpha",
+            opened={"/work/alpha"},
+            names={},
+            agents={"/work/alpha": ("copilot",)},
+        )
+        self.assertIn("\u26a1 copilot", agent_rows)
+
         plain = picker.format_ansi_rows(
             ["/work/gamma"],
             current=None,

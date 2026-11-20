@@ -13,12 +13,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .config import NamesError, load_names, workspace_label
-from .frecency import current_project, open_paths, rank_paths, read_history
+from .frecency import agents_by_path, current_project, open_paths, rank_paths, read_history
 from .herdr import Herdr, HerdrError, layout_ops
 from .picker import (
     ALL_ROWS_ENV,
     BACKEND_ENV,
     GIT_ROWS_ENV,
+    OPEN_ROWS_ENV,
     PickerError,
     Result,
     resolve_backend,
@@ -346,6 +347,7 @@ def interactive(
     pane_id = active_pane_id()
     opened = open_paths(workspaces, panes, mapping, names)
     current = current_project(pane_id, panes, workspaces, mapping, names)
+    agents = agents_by_path(workspaces, panes, mapping, names)
     history = read_history(source=settings.history)
     paths_git = rank_paths(history, current, opened, False)
     paths_all = rank_paths(history, current, opened, True)
@@ -364,6 +366,7 @@ def interactive(
             src_pane=pane_id,
             herdr=herdr,
             mapping_reader=mapping_reader,
+            agents=agents,
         )
     elif backend == "skim":
         result = run_skim(
@@ -379,6 +382,7 @@ def interactive(
             mapping_reader=mapping_reader,
             history=history,
             close_callback=lambda target: close(target, names, herdr),
+            agents=agents,
         )
     elif backend == "gum":
         result = run_gum(
@@ -392,6 +396,7 @@ def interactive(
             src_pane=pane_id,
             herdr=herdr,
             mapping_reader=mapping_reader,
+            agents=agents,
         )
     else:
         from .tui import PickerApp
@@ -413,6 +418,7 @@ def interactive(
             theme_setting=settings.theme,
             workspaces=workspaces,
             panes=panes,
+            agents=agents,
         )
         result = app.run()
     ignore_hangup()
@@ -432,11 +438,14 @@ def _refresh_row_files(
     all_file = Path(all_env)
     if not git_file.parent.is_dir() or not all_file.parent.is_dir():
         return
+    open_env = os.environ.get(OPEN_ROWS_ENV)
+    open_file = Path(open_env) if open_env and Path(open_env).parent.is_dir() else None
     workspaces, panes = _fetch_herdr_state(herdr)
     mapping = read_live_mapping(path, instance)
     pane_id = active_pane_id()
     opened = open_paths(workspaces, panes, mapping, names)
     current = current_project(pane_id, panes, workspaces, mapping, names)
+    agents = agents_by_path(workspaces, panes, mapping, names)
     history = read_history(source=load_settings().history)
     write_row_files(
         git_file,
@@ -446,6 +455,8 @@ def _refresh_row_files(
         current,
         opened,
         names,
+        open_file=open_file,
+        agents=agents,
     )
 
 

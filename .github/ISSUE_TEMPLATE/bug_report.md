@@ -13,6 +13,8 @@ labels: bug
 1.
 2.
 
+**Area** (keep one or more): `tui`, `tabs`, `agents`, `backends`, `config`
+
 **Environment**
 
 - Herdr version (`herdr --version`):

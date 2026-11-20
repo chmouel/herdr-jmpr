@@ -4,7 +4,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    labels: ["dependencies", "github_actions", "ci"]
   - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"
+    labels: ["dependencies", "python"]

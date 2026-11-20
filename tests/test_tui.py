@@ -308,6 +308,7 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
             for line in lines:
                 self.assertLessEqual(len(line), 70)
             self.assertIn("\u2026", lines[1])
+            self.assertTrue(lines[1].rstrip().endswith("long-name-1"), lines[1])
 
     async def test_selection_bar_spans_the_whole_column(self):
         paths = [str(self.root / ("wide-row-" * 20 + f"{index}")) for index in range(4)]

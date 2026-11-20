@@ -380,6 +380,46 @@ class RowList(Static):
                 return width
         return 0
 
+    @staticmethod
+    def _middle_truncate(segment: Text, max_width: int, ellipsis_style: str) -> Text:
+        if max_width <= 0 or segment.cell_len <= max_width:
+            return segment
+        if max_width <= 3:
+            truncated = segment.copy()
+            truncated.truncate(max_width, overflow="ellipsis", pad=False)
+            return truncated
+        plain = segment.plain
+        room = max_width - 1
+        head_budget = max(2, min(14, room // 4))
+        head_idx = 0
+        head_cells = 0
+        for index, char in enumerate(plain):
+            char_width = cell_len(char)
+            if head_cells + char_width > head_budget:
+                break
+            head_cells += char_width
+            head_idx = index + 1
+        slash = plain.rfind("/", 0, head_idx)
+        if slash >= 1:
+            head_idx = slash + 1
+            head_cells = cell_len(plain[:head_idx])
+
+        tail_budget = room - head_cells
+        tail_idx = len(plain)
+        tail_cells = 0
+        for index in range(len(plain) - 1, head_idx - 1, -1):
+            char_width = cell_len(plain[index])
+            if tail_cells + char_width > tail_budget:
+                break
+            tail_cells += char_width
+            tail_idx = index
+
+        result = Text()
+        result.append_text(segment[:head_idx])
+        result.append("\u2026", style=ellipsis_style)
+        result.append_text(segment[tail_idx:])
+        return result
+
     def _build_text(self) -> Text:
         text = Text()
         width = self._row_width()
@@ -422,12 +462,11 @@ class RowList(Static):
                 body, suffix = shown, ""
             dir_end = body.rfind("/") + 1
             hot = row.marker in (CURRENT_MARK, OPEN_MARK)
-            line.append(shown)
-            offset = 4
+            shown_text = Text(shown)
 
             if keep_tokens:
                 if dir_end:
-                    line.stylize(palette.muted, offset, offset + dir_end)
+                    shown_text.stylize(palette.muted, 0, dir_end)
                 if len(body) > dir_end:
                     base_style = (
                         f"bold {palette.foreground}".strip()
@@ -435,7 +474,7 @@ class RowList(Static):
                         else palette.foreground
                     )
                     if base_style:
-                        line.stylize(base_style, offset + dir_end, offset + len(body))
+                        shown_text.stylize(base_style, dir_end, len(body))
                 if suffix:
                     suffix_style = (
                         palette.secondary
@@ -443,11 +482,11 @@ class RowList(Static):
                         else f"italic {palette.secondary}"
                     )
                     gap_len = len(suffix) - len(suffix.lstrip(" "))
-                    line.stylize(
-                        suffix_style, offset + len(body) + gap_len, offset + len(shown)
+                    shown_text.stylize(
+                        suffix_style, len(body) + gap_len, len(shown)
                     )
             elif len(body) > dir_end:
-                line.stylize("bold", offset + dir_end, offset + len(body))
+                shown_text.stylize("bold", dir_end, len(body))
 
             match_style = (
                 f"bold underline {palette.warning}"
@@ -458,30 +497,27 @@ class RowList(Static):
                 start = max(0, min(start, len(shown)))
                 end = max(start, min(end, len(shown)))
                 if end > start:
-                    line.stylize(match_style, offset + start, offset + end)
+                    shown_text.stylize(match_style, start, end)
 
+            badge = format_agent_badges(row.agents) if row.agents else ""
+            badge_width = cell_len(badge) if badge else 0
+            show_badge = bool(badge) and (
+                not width or (width - 4 - badge_width - 2 > 6)
+            )
             if width:
-                line.truncate(width, overflow="ellipsis", pad=False)
-            if row.agents:
-                badge = format_agent_badges(row.agents)
-                badge_width = cell_len(badge)
-                if width:
-                    room = width - badge_width - 2
-                    if room > 6 and line.cell_len > room:
-                        line.truncate(room, overflow="ellipsis", pad=False)
-                    if line.cell_len + 2 + badge_width <= width:
-                        gap = width - line.cell_len - badge_width
-                        line.append(" " * gap)
-                        line.append(
-                            badge,
-                            style=f"bold {palette.warning}" if keep_tokens else "bold",
-                        )
-                else:
-                    line.append("  ")
-                    line.append(
-                        badge,
-                        style=f"bold {palette.warning}" if keep_tokens else "bold",
-                    )
+                avail = width - 4 - (badge_width + 2 if show_badge else 0)
+                shown_text = self._middle_truncate(
+                    shown_text, avail, palette.muted if keep_tokens else ""
+                )
+            line.append_text(shown_text)
+
+            if show_badge:
+                gap = max(2, width - line.cell_len - badge_width) if width else 2
+                line.append(" " * gap)
+                line.append(
+                    badge,
+                    style=f"bold {palette.warning}" if keep_tokens else "bold",
+                )
             if width:
                 line.truncate(width, overflow="ellipsis", pad=selected)
             if selected:

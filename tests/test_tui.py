@@ -445,6 +445,17 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(app.return_value)
         self.assertEqual(app.return_value.path, os.path.abspath(self.other))
 
+    async def test_number_shortcut_activates_numbered_row_over_typed_path(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            app.insert_text(self.root.as_posix() + "/")
+            await pilot.pause()
+            self.assertEqual(app.typed_target(), os.path.abspath(self.root))
+            await pilot.press("alt+1")
+            await pilot.pause()
+        self.assertIsNotNone(app.return_value)
+        self.assertEqual(app.return_value.path, self.repo)
+
     async def test_preview_is_hidden_by_default_and_toggles_on(self):
         app = self.app()
         async with app.run_test(size=(120, 40)) as pilot:

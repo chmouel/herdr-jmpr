@@ -219,6 +219,25 @@ class FrecencyTest(unittest.TestCase):
         self.assertEqual(rank_paths([], None, opened, show_all=False), [str(wt)])
         self.assertEqual(rank_paths([], None, opened, show_all=True), [str(wt)])
 
+    def test_fallback_prefers_saved_mapping_path_over_first_sorted_cwd(self):
+        workspaces = [{"workspace_id": "w1", "label": "custom-label"}]
+        panes = [
+            {"workspace_id": "w1", "cwd": "/tmp/aaa", "agent": "pi"},
+            {"workspace_id": "w1", "cwd": "/tmp/zzz", "agent": None},
+        ]
+        saved = {"w1": "/tmp/zzz"}
+        self.assertEqual(agents_by_path(workspaces, panes, saved, {}), {"/tmp/zzz": ("pi",)})
+        self.assertEqual(
+            frecency._workspace_paths(workspaces[0], {"w1": {"/tmp/aaa", "/tmp/zzz"}}, saved, {}),
+            ["/tmp/zzz"],
+        )
+        self.assertEqual(
+            frecency._workspace_paths(
+                workspaces[0], {"w1": {"/tmp/aaa"}}, {"w1": "/tmp/zzz"}, {}
+            ),
+            ["/tmp/aaa"],
+        )
+
     def test_tabs_by_path_orders_tabs_and_detects_agents(self):
         repo = self.root / "raffi"
         repo.mkdir()

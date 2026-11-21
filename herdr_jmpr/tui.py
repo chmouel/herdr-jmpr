@@ -2405,8 +2405,8 @@ class PickerApp(App[Result | None]):
         return row.path if row else None
 
     @work(exclusive=True)
-    async def accept(self) -> None:
-        typed = self.typed_target()
+    async def accept(self, *, prefer_typed: bool = True) -> None:
+        typed = self.typed_target() if prefer_typed else None
         if typed:
             target = typed
             target_tab_id = ""
@@ -2564,12 +2564,14 @@ class PickerApp(App[Result | None]):
             available.insert(0, "herdr-ink")
         await self.push_screen_wait(ThemePickerModal(available, self.theme))
 
-    def select_row_at(self, index: int, *, activate: bool = False) -> None:
+    def select_row_at(
+        self, index: int, *, activate: bool = False, prefer_typed: bool = True
+    ) -> None:
         if not 0 <= index < len(self.filtered) or self.filtered[index].is_divider:
             return
         self.set_index(index)
         if activate:
-            self.accept()
+            self.accept(prefer_typed=prefer_typed)
 
     def toggle_all(self) -> None:
         if self.scope == "open":
@@ -2862,16 +2864,16 @@ class PickerApp(App[Result | None]):
         self.pending = character
 
     KEY_INSERT = {
-        "alt+1": lambda self: self.select_row_at(0, activate=True),
-        "alt+2": lambda self: self.select_row_at(1, activate=True),
-        "alt+3": lambda self: self.select_row_at(2, activate=True),
-        "alt+4": lambda self: self.select_row_at(3, activate=True),
-        "alt+5": lambda self: self.select_row_at(4, activate=True),
-        "alt+6": lambda self: self.select_row_at(5, activate=True),
-        "alt+7": lambda self: self.select_row_at(6, activate=True),
-        "alt+8": lambda self: self.select_row_at(7, activate=True),
-        "alt+9": lambda self: self.select_row_at(8, activate=True),
-        "alt+0": lambda self: self.select_row_at(9, activate=True),
+        "alt+1": lambda self: self.select_row_at(0, activate=True, prefer_typed=False),
+        "alt+2": lambda self: self.select_row_at(1, activate=True, prefer_typed=False),
+        "alt+3": lambda self: self.select_row_at(2, activate=True, prefer_typed=False),
+        "alt+4": lambda self: self.select_row_at(3, activate=True, prefer_typed=False),
+        "alt+5": lambda self: self.select_row_at(4, activate=True, prefer_typed=False),
+        "alt+6": lambda self: self.select_row_at(5, activate=True, prefer_typed=False),
+        "alt+7": lambda self: self.select_row_at(6, activate=True, prefer_typed=False),
+        "alt+8": lambda self: self.select_row_at(7, activate=True, prefer_typed=False),
+        "alt+9": lambda self: self.select_row_at(8, activate=True, prefer_typed=False),
+        "alt+0": lambda self: self.select_row_at(9, activate=True, prefer_typed=False),
         "down": lambda self: self.set_index(self.index + 1),
         "up": lambda self: self.set_index(self.index - 1),
         "left": lambda self: self.collapse_selected(),
@@ -2908,26 +2910,26 @@ class PickerApp(App[Result | None]):
     }
 
     KEY_NORMAL = {
-        "1": lambda self: self.select_row_at(0, activate=True),
-        "2": lambda self: self.select_row_at(1, activate=True),
-        "3": lambda self: self.select_row_at(2, activate=True),
-        "4": lambda self: self.select_row_at(3, activate=True),
-        "5": lambda self: self.select_row_at(4, activate=True),
-        "6": lambda self: self.select_row_at(5, activate=True),
-        "7": lambda self: self.select_row_at(6, activate=True),
-        "8": lambda self: self.select_row_at(7, activate=True),
-        "9": lambda self: self.select_row_at(8, activate=True),
-        "0": lambda self: self.select_row_at(9, activate=True),
-        "alt+1": lambda self: self.select_row_at(0, activate=True),
-        "alt+2": lambda self: self.select_row_at(1, activate=True),
-        "alt+3": lambda self: self.select_row_at(2, activate=True),
-        "alt+4": lambda self: self.select_row_at(3, activate=True),
-        "alt+5": lambda self: self.select_row_at(4, activate=True),
-        "alt+6": lambda self: self.select_row_at(5, activate=True),
-        "alt+7": lambda self: self.select_row_at(6, activate=True),
-        "alt+8": lambda self: self.select_row_at(7, activate=True),
-        "alt+9": lambda self: self.select_row_at(8, activate=True),
-        "alt+0": lambda self: self.select_row_at(9, activate=True),
+        "1": lambda self: self.select_row_at(0, activate=True, prefer_typed=False),
+        "2": lambda self: self.select_row_at(1, activate=True, prefer_typed=False),
+        "3": lambda self: self.select_row_at(2, activate=True, prefer_typed=False),
+        "4": lambda self: self.select_row_at(3, activate=True, prefer_typed=False),
+        "5": lambda self: self.select_row_at(4, activate=True, prefer_typed=False),
+        "6": lambda self: self.select_row_at(5, activate=True, prefer_typed=False),
+        "7": lambda self: self.select_row_at(6, activate=True, prefer_typed=False),
+        "8": lambda self: self.select_row_at(7, activate=True, prefer_typed=False),
+        "9": lambda self: self.select_row_at(8, activate=True, prefer_typed=False),
+        "0": lambda self: self.select_row_at(9, activate=True, prefer_typed=False),
+        "alt+1": lambda self: self.select_row_at(0, activate=True, prefer_typed=False),
+        "alt+2": lambda self: self.select_row_at(1, activate=True, prefer_typed=False),
+        "alt+3": lambda self: self.select_row_at(2, activate=True, prefer_typed=False),
+        "alt+4": lambda self: self.select_row_at(3, activate=True, prefer_typed=False),
+        "alt+5": lambda self: self.select_row_at(4, activate=True, prefer_typed=False),
+        "alt+6": lambda self: self.select_row_at(5, activate=True, prefer_typed=False),
+        "alt+7": lambda self: self.select_row_at(6, activate=True, prefer_typed=False),
+        "alt+8": lambda self: self.select_row_at(7, activate=True, prefer_typed=False),
+        "alt+9": lambda self: self.select_row_at(8, activate=True, prefer_typed=False),
+        "alt+0": lambda self: self.select_row_at(9, activate=True, prefer_typed=False),
         "j": lambda self: self.set_index(self.index + 1),
         "k": lambda self: self.set_index(self.index - 1),
         "down": lambda self: self.set_index(self.index + 1),

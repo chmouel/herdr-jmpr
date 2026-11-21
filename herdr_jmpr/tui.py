@@ -724,11 +724,12 @@ class RowList(ScrollView, can_focus=False):
                 style=f"bold {palette.warning}" if keep_tokens else "bold",
             )
         badge_width = right_meta.cell_len
+        lead = line.cell_len
         show_badge = bool(badge_width) and (
-            not width or (width - 4 - badge_width - 2 > 6)
+            not width or (width - lead - badge_width - 2 > 6)
         )
         if width:
-            avail = width - 4 - (badge_width + 2 if show_badge else 0)
+            avail = width - lead - (badge_width + 2 if show_badge else 0)
             shown_text = self._middle_truncate(
                 shown_text, avail, palette.muted if keep_tokens else ""
             )

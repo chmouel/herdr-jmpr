@@ -257,6 +257,17 @@ def current_project(
     return current
 
 
+def _label_or_fallback_cwds(
+    label: object, cwds: set[str] | tuple, names: dict[str, str]
+) -> list[str]:
+    """Pane cwds matching the workspace label, else the first cwd so renamed
+    or custom-labelled workspaces are not dropped."""
+
+    ordered = sorted(cwds)
+    matched = [cwd for cwd in ordered if workspace_label(cwd, names) == label]
+    return matched or ordered[:1]
+
+
 def agents_by_path(
     workspaces: list[dict],
     panes: list[dict],
@@ -293,9 +304,8 @@ def agents_by_path(
         if checkout:
             by_path.setdefault(checkout, []).extend(agents)
             continue
-        for cwd in ws_cwds.get(str(ws_id), ()):
-            if workspace_label(cwd, names) == label:
-                by_path.setdefault(cwd, []).extend(agents)
+        for cwd in _label_or_fallback_cwds(label, ws_cwds.get(str(ws_id), ()), names):
+            by_path.setdefault(cwd, []).extend(agents)
     return {path: tuple(sorted(agents)) for path, agents in by_path.items()}
 
 
@@ -335,11 +345,7 @@ def _workspace_paths(
     checkout = workspace_worktree_path(workspace)
     if checkout:
         return [checkout]
-    return [
-        cwd
-        for cwd in sorted(ws_cwds.get(str(ws_id), ()))
-        if workspace_label(cwd, names) == label
-    ]
+    return _label_or_fallback_cwds(label, ws_cwds.get(str(ws_id), ()), names)
 
 
 def tabs_by_path(

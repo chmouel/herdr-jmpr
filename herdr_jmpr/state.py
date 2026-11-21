@@ -11,6 +11,11 @@ from pathlib import Path
 from .config import normalize_path, workspace_label
 from .frecency import workspace_worktree_path
 
+TOKEN_PATH = "jmpr_path"
+# Herdr caps metadata token values at 80 characters. A value at the cap may be
+# truncated, so it is never trusted as an exact path.
+TOKEN_CAP = 80
+
 
 class StateError(Exception):
     """Raised when a state file exists but cannot be trusted."""
@@ -73,22 +78,74 @@ def read_mapping(path: Path) -> dict[str, dict]:
     return {"instance": "", "workspaces": {}}
 
 
-def read_live_mapping(path: Path, instance: str) -> dict[str, str]:
+def read_live_mapping(
+    path: Path, instance: str, workspaces: list[dict] | None = None
+) -> dict[str, str]:
     """Saved mapping for the running server, or an empty one after a restart."""
 
     try:
-        return read_live_mapping_strict(path, instance)
+        return read_live_mapping_strict(path, instance, workspaces)
     except StateError:
         return {}
 
 
-def read_live_mapping_strict(path: Path, instance: str) -> dict[str, str]:
-    """Same as :func:`read_live_mapping` but propagates an untrusted file."""
+def read_live_mapping_strict(
+    path: Path, instance: str, workspaces: list[dict] | None = None
+) -> dict[str, str]:
+    """Same as :func:`read_live_mapping` but propagates an untrusted file.
+
+    ``instance`` identifies the server that wrote the file. Pass ``workspaces``
+    to refresh the mapping from the live snapshot: workspace tokens win over the
+    file, and stale workspace ids are dropped.
+    """
 
     state = read_mapping(path)
-    if state.get("instance") != instance:
-        return {}
-    return dict(state["workspaces"])
+    mapping = dict(state["workspaces"]) if state.get("instance") == instance else {}
+    if workspaces is None:
+        return mapping
+    live_ids = {
+        str(workspace.get("workspace_id"))
+        for workspace in workspaces
+        if isinstance(workspace, dict)
+    }
+    mapping = {key: value for key, value in mapping.items() if key in live_ids}
+    return overlay_tokens(mapping, workspaces)
+
+
+def overlay_tokens(
+    mapping: dict[str, str], workspaces: list[dict]
+) -> dict[str, str]:
+    """Fill gaps in a file mapping from workspace tokens.
+
+    The file is written under the same lock before the token report, so it is
+    never older than the token. On a conflict the durable value wins: the token
+    publish failed or the process died between the two writes.
+    """
+
+    for workspace_id, token_path in mapping_from_tokens(workspaces).items():
+        mapping.setdefault(workspace_id, token_path)
+    return mapping
+
+
+def mapping_from_tokens(workspaces: list[dict]) -> dict[str, str]:
+    """Project paths reported by this plugin as workspace metadata tokens.
+
+    Values at Herdr's 80-character cap are skipped: they may be truncated, and
+    claiming one would shadow the pane-cwd and worktree fallbacks.
+    """
+
+    mapping: dict[str, str] = {}
+    for workspace in workspaces:
+        if not isinstance(workspace, dict):
+            continue
+        workspace_id = workspace.get("workspace_id")
+        tokens = workspace.get("tokens")
+        if not workspace_id or not isinstance(tokens, dict):
+            continue
+        path = tokens.get(TOKEN_PATH)
+        if isinstance(path, str) and path and len(path) < TOKEN_CAP:
+            mapping[str(workspace_id)] = path
+    return mapping
 
 
 def recover(
@@ -96,9 +153,12 @@ def recover(
     socket_path: str,
     instance: str,
     live_ids: set[str],
+    tokens: dict[str, str] | None = None,
 ) -> dict:
     workspaces = dict(state.get("workspaces") or {})
     if state.get("instance") != instance:
+        # A cold restart keeps the workspace ids but drops server-side tokens,
+        # so the saved session is still the only source of restored identity.
         session = Path(os.path.dirname(socket_path)) / "session.json"
         saved: list = []
         try:
@@ -123,6 +183,9 @@ def recover(
         for workspace_id, target in workspaces.items()
         if workspace_id in live_ids
     }
+    for workspace_id, target in (tokens or {}).items():
+        if workspace_id in live_ids:
+            workspaces.setdefault(workspace_id, target)
     return {"instance": instance, "workspaces": workspaces}
 
 

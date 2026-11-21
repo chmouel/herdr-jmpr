@@ -14,13 +14,28 @@ from herdr_jmpr import cli
 class FakeHerdr:
     """Writes a script that logs argv and serves a mutable fixture."""
 
-    def __init__(self, root: Path, workspaces, panes, layout=None):
+    def __init__(self, root: Path, workspaces, panes, layout=None, tabs=None):
         self.root = root
         self.log = root / "calls.log"
         self.fixture = root / "fixture.json"
         self.layout = layout or {}
+        if tabs is None and self.layout.get("tab_id"):
+            tabs = [
+                {
+                    "tab_id": self.layout.get("tab_id"),
+                    "workspace_id": self.layout.get("workspace_id"),
+                    "label": "mytab",
+                }
+            ]
         self.fixture.write_text(
-            json.dumps({"workspaces": workspaces, "panes": panes, "layout": self.layout})
+            json.dumps(
+                {
+                    "workspaces": workspaces,
+                    "panes": panes,
+                    "layout": self.layout,
+                    "tabs": tabs or [],
+                }
+            )
         )
         self.executable = root / "herdr"
         self.executable.write_text(
@@ -33,9 +48,7 @@ class FakeHerdr:
             "if args[:2] == ['status', '--json']:\n"
             "    print(json.dumps({'server': {'socket': os.environ['FAKE_STATUS_SOCKET']}}))\n"
             "    sys.exit(0)\n"
-            "if args[:2] == ['workspace', 'list']:\n"
-            "    result = {'workspaces': data['workspaces']}\n"
-            "elif args[:2] == ['pane', 'list']:\n"
+            "if args[:2] == ['api', 'snapshot']:\n"
             "    panes = data['panes']\n"
             "    if os.environ.get('FAKE_EXTRA_PANE'):\n"
             "        counter = os.environ['FAKE_LOG'] + '.count'\n"
@@ -43,7 +56,21 @@ class FakeHerdr:
             "        open(counter, 'w').write(str(seen + 1))\n"
             "        if seen >= 1:\n"
             "            panes = panes + [json.loads(os.environ['FAKE_EXTRA_PANE'])]\n"
-            "    result = {'panes': panes}\n"
+            "    result = {'snapshot': {\n"
+            "        'workspaces': data['workspaces'],\n"
+            "        'panes': panes,\n"
+            "        'tabs': data['tabs'],\n"
+            "        'layouts': [data['layout']] if data['layout'] else []}}\n"
+            "elif args[:2] == ['workspace', 'list']:\n"
+            "    result = {'workspaces': data['workspaces']}\n"
+            "elif args[:2] == ['pane', 'list']:\n"
+            "    result = {'panes': data['panes']}\n"
+            "elif args[:2] == ['tab', 'list']:\n"
+            "    result = {'tabs': data['tabs']}\n"
+            "elif args[:2] == ['workspace', 'report-metadata']:\n"
+            "    data.setdefault('tokens', []).append([args[2], args[-1]])\n"
+            "    json.dump(data, open(os.environ['FAKE_FIXTURE'], 'w'))\n"
+            "    result = {}\n"
             "elif args[:2] == ['workspace', 'close']:\n"
             "    data['workspaces'] = [w for w in data['workspaces']"
             " if w['workspace_id'] != args[2]]\n"
@@ -75,6 +102,10 @@ class FakeHerdr:
         if not self.log.exists():
             return []
         return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+    def tokens(self):
+        data = json.loads(self.fixture.read_text())
+        return data.get("tokens") or []
 
 
 class CliTest(unittest.TestCase):
@@ -525,6 +556,68 @@ class JumpTest(unittest.TestCase):
             ],
         )
 
+    def test_jump_publishes_the_workspace_token(self):
+        fake = self.fake()
+        self.assertEqual(self.run_jump(self.result(), fake), 0)
+        self.assertEqual(fake.tokens(), [["w-new", f"jmpr_path={self.target}"]])
+
+    def test_workspace_token_reuses_a_workspace_without_file_state(self):
+        fake = self.fake(
+            workspaces=[
+                {
+                    "workspace_id": "w1",
+                    "label": "proj",
+                    "active_tab_id": "t",
+                    "tokens": {"jmpr_path": str(self.target)},
+                }
+            ],
+        )
+        self.assertEqual(self.run_jump(self.result(), fake), 0)
+        self.assertIn(["workspace", "focus", "w1"], fake.calls())
+        self.assertFalse(any(call[:2] == ["workspace", "create"] for call in fake.calls()))
+
+    def test_publish_state_republishes_saved_mapping(self):
+        from herdr_jmpr import state
+
+        fake = self.fake(
+            workspaces=[{"workspace_id": "w1", "label": "proj", "active_tab_id": "t"}],
+        )
+        with mock.patch.dict(os.environ, self.environment):
+            state.write_state(
+                state.state_file(str(self.socket)),
+                {
+                    "instance": state.socket_instance(str(self.socket)),
+                    "workspaces": {"w1": str(self.target), "gone": "/dead"},
+                },
+            )
+        with mock.patch.dict(os.environ, self.environment | {"HERDR_BIN_PATH": str(fake.executable)}):
+            self.assertEqual(cli.main(["publish-state"]), 0)
+        self.assertEqual(fake.tokens(), [["w1", f"jmpr_path={self.target}"]])
+        self.assertEqual(self.mapping(), {"w1": str(self.target)})
+
+    def test_workspace_closed_hook_prunes_state(self):
+        from herdr_jmpr import state
+
+        fake = self.fake()
+        with mock.patch.dict(os.environ, self.environment):
+            state.write_state(
+                state.state_file(str(self.socket)),
+                {
+                    "instance": state.socket_instance(str(self.socket)),
+                    "workspaces": {"w1": "/a", "w2": "/b"},
+                },
+            )
+        event = json.dumps(
+            {"type": "workspace_closed", "workspace": {"workspace_id": "w1"}}
+        )
+        with mock.patch.dict(
+            os.environ,
+            self.environment
+            | {"HERDR_BIN_PATH": str(fake.executable), "HERDR_PLUGIN_EVENT_JSON": event},
+        ):
+            self.assertEqual(cli.main(["workspace-closed"]), 0)
+        self.assertEqual(self.mapping(), {"w2": "/b"})
+
     def test_move_pane_creates_workspace_without_create_call(self):
         fake = self.fake()
         layout = {
@@ -598,3 +691,23 @@ class JumpTest(unittest.TestCase):
         self.assertEqual(self.run_jump(result, fake), 0)
         self.assertIn(["workspace", "focus", "w1"], fake.calls())
         self.assertIn(["tab", "focus", "t2"], fake.calls())
+
+
+class ClosedWorkspaceIdTest(unittest.TestCase):
+    def test_reads_the_workspace_object(self):
+        payload = json.dumps(
+            {"type": "workspace_closed", "workspace": {"workspace_id": "w1"}}
+        )
+        self.assertEqual(cli.closed_workspace_id(payload), "w1")
+
+    def test_reads_a_flat_or_nested_id(self):
+        self.assertEqual(cli.closed_workspace_id(json.dumps({"workspace_id": "w2"})), "w2")
+        self.assertEqual(
+            cli.closed_workspace_id(json.dumps({"data": {"workspace": {"workspace_id": "w3"}}})),
+            "w3",
+        )
+
+    def test_ignores_broken_or_empty_payloads(self):
+        self.assertEqual(cli.closed_workspace_id("{"), "")
+        self.assertEqual(cli.closed_workspace_id(""), "")
+        self.assertEqual(cli.closed_workspace_id(json.dumps({"type": "x"})), "")

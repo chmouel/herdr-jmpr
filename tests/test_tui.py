@@ -83,6 +83,34 @@ class FakeHerdr:
     def tab_label(self, tab_id):
         return self.tab
 
+    def snapshot(self):
+        tabs_fn = getattr(self, "tabs", None)
+        tabs = list(tabs_fn()) if callable(tabs_fn) else []
+        if not tabs:
+            tabs = [
+                {
+                    "tab_id": self.layout.get("tab_id"),
+                    "workspace_id": self.layout.get("workspace_id"),
+                    "label": self.tab,
+                }
+            ]
+        panes = self.panes()
+        layouts, seen = [], set()
+        for pane in panes:
+            tab_id = pane.get("tab_id")
+            if not tab_id or tab_id in seen or not pane.get("pane_id"):
+                continue
+            seen.add(tab_id)
+            layouts.append(self.pane_layout(pane["pane_id"]))
+        if not layouts:
+            layouts = [self.layout]
+        return {
+            "workspaces": self.workspaces(),
+            "panes": panes,
+            "tabs": tabs,
+            "layouts": layouts,
+        }
+
     def workspace_close(self, workspace_id):
         self.closed.append(workspace_id)
         self._workspaces = [
@@ -115,7 +143,7 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
             "opened": set(),
             "names": {},
             "herdr": self.herdr,
-            "mapping_reader": lambda: self.mapping,
+            "mapping_reader": lambda *_: self.mapping,
             "src_pane": "A",
         }
         options.update(kwargs)
@@ -444,7 +472,7 @@ class CloseTest(unittest.IsolatedAsyncioTestCase):
             opened={self.repo},
             names={},
             herdr=herdr,
-            mapping_reader=lambda: self.mapping,
+            mapping_reader=lambda *_: self.mapping,
             src_pane="A",
         )
 
@@ -573,7 +601,7 @@ class CloseTest(unittest.IsolatedAsyncioTestCase):
             opened={self.repo},
             names={},
             herdr=FakeHerdr(),
-            mapping_reader=lambda: {},
+            mapping_reader=lambda *_: {},
             src_pane="A",
             agents={self.repo: ("copilot", "codex")},
         )
@@ -634,7 +662,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
             opened=set(),
             names={},
             herdr=herdr,
-            mapping_reader=lambda: mapping,
+            mapping_reader=lambda *_: mapping,
             src_pane="A",
         )
 
@@ -704,7 +732,7 @@ class ExtendedFilterAndModesTest(unittest.IsolatedAsyncioTestCase):
             opened=set(),
             names={},
             herdr=FakeHerdr(),
-            mapping_reader=lambda: {},
+            mapping_reader=lambda *_: {},
             src_pane="A",
         )
 
@@ -782,7 +810,7 @@ class ExtendedFilterAndModesTest(unittest.IsolatedAsyncioTestCase):
             opened=set(),
             names=names,
             herdr=FakeHerdr(),
-            mapping_reader=lambda: {},
+            mapping_reader=lambda *_: {},
             src_pane="A",
         )
         async with app.run_test():
@@ -880,7 +908,7 @@ class CloseRevalidationTupleTest(unittest.IsolatedAsyncioTestCase):
             opened={repo},
             names={},
             herdr=herdr,
-            mapping_reader=lambda: {"A": repo, "B": repo},
+            mapping_reader=lambda *_: {"A": repo, "B": repo},
             src_pane="A",
         )
         async with app.run_test() as pilot:
@@ -939,7 +967,7 @@ class CloseRevalidationLoopTest(unittest.IsolatedAsyncioTestCase):
             opened={self.repo},
             names={},
             herdr=herdr,
-            mapping_reader=lambda: mapping if mapping is not None else {},
+            mapping_reader=lambda *_: mapping if mapping is not None else {},
             src_pane="A",
         )
 
@@ -1025,7 +1053,7 @@ class CloseRevalidationLoopTest(unittest.IsolatedAsyncioTestCase):
         herdr = FakeHerdr(workspaces=self.workspaces, panes=[self.pane("p1")])
         broken = StateError(Path(self.root / "state.json"))
 
-        def reader():
+        def reader(*_):
             raise broken
 
         app = PickerApp(
@@ -1077,7 +1105,7 @@ class RankingRefreshTest(unittest.IsolatedAsyncioTestCase):
             opened=opened,
             names={},
             herdr=herdr,
-            mapping_reader=lambda: self.mapping,
+            mapping_reader=lambda *_: self.mapping,
             history=self.history,
             src_pane="A",
         )
@@ -1116,7 +1144,7 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             "opened": {self.other},
             "names": {},
             "herdr": FakeHerdr(),
-            "mapping_reader": lambda: {},
+            "mapping_reader": lambda *_: {},
             "src_pane": "A",
         }
         options.update(kwargs)
@@ -1569,7 +1597,7 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
             opened={str(self.open_ws)},
             names={},
             herdr=FakeHerdr(),
-            mapping_reader=lambda: {"w1": str(self.open_ws)},
+            mapping_reader=lambda *_: {"w1": str(self.open_ws)},
             src_pane="w1:p1",
             agents={str(self.open_ws): ("pi",)},
             tabs=self.tabs,
@@ -1756,7 +1784,7 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
         app = self.make_app(
             herdr=herdr,
             opened={str(self.open_ws), str(self.closed_sub)},
-            mapping_reader=lambda: {"w1": str(self.open_ws), "w2": str(self.closed_sub)},
+            mapping_reader=lambda *_: {"w1": str(self.open_ws), "w2": str(self.closed_sub)},
             tabs=all_tabs,
             start_mode="normal",
         )

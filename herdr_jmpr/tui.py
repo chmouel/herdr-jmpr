@@ -42,7 +42,12 @@ from .frecency import (
     tabs_by_path,
     workspace_worktree_path,
 )
-from .herdr import Herdr, HerdrError, move_tab_layout
+from .herdr import (
+    Herdr,
+    HerdrError,
+    move_tab_layout,
+    snapshot_layouts,
+)
 from .picker import (
     PickerError,
     Result,
@@ -1135,13 +1140,13 @@ class PickerApp(App[Result | None]):
         self._previous_scope = self.scope
         self.src_pane = src_pane
         self.herdr = herdr or Herdr()
-        self.mapping_reader = mapping_reader or (lambda: {})
+        self.mapping_reader = mapping_reader or (lambda workspaces=None: {})
         self.strict_mapping_reader = strict_mapping_reader or self.mapping_reader
         self.history = history
         self.agents: dict[str, tuple[str, ...]] = dict(agents) if agents else {}
         if not self.agents and workspaces and panes:
             self.agents = agents_by_path(
-                workspaces, panes, self.safe_mapping(), names
+                workspaces, panes, self.safe_mapping(workspaces), names
             )
         self.tabs: dict[str, tuple[TabEntry, ...]] = dict(tabs) if tabs else {}
         self.show_tabs = show_tabs
@@ -1169,6 +1174,8 @@ class PickerApp(App[Result | None]):
         self._preview_eager = True
         self._snapshot_workspaces = workspaces
         self._snapshot_panes = panes
+        self._snapshot_layouts: dict[str, dict] = {}
+        self._snapshot_tabs: list[dict] = []
         self._last_width = 0
         self._frame_width = 0
         self.theme = self._resolve_theme(theme_setting)
@@ -1884,6 +1891,8 @@ class PickerApp(App[Result | None]):
         self._preview_generation += 1
         self._snapshot_workspaces = None
         self._snapshot_panes = None
+        self._snapshot_layouts = {}
+        self._snapshot_tabs = []
 
     def update_preview(self) -> None:
         preview = self.query_one("#preview", Static)
@@ -2233,7 +2242,7 @@ class PickerApp(App[Result | None]):
                 panes = self.herdr.panes()
             except HerdrError:
                 workspaces, panes = [], []
-        mapping = self.safe_mapping()
+        mapping = self.safe_mapping(workspaces)
         label = workspace_label(path, self.names)
         normalized_path = normalize_path(path)
         open_ids = [
@@ -2317,9 +2326,9 @@ class PickerApp(App[Result | None]):
         self.update_preview()
         self._prefetch_neighbours()
 
-    def safe_mapping(self) -> dict[str, str]:
+    def safe_mapping(self, workspaces: list[dict] | None = None) -> dict[str, str]:
         try:
-            return self.mapping_reader()
+            return self.mapping_reader(workspaces)
         except StateError:
             return {}
 
@@ -2380,12 +2389,15 @@ class PickerApp(App[Result | None]):
         self.exit(result)
 
     async def herdr_state(self) -> tuple[list[dict], list[dict]]:
-        """Fetch workspaces and panes concurrently without blocking the UI."""
-        workspaces, panes = await asyncio.gather(
-            asyncio.to_thread(self.herdr.workspaces),
-            asyncio.to_thread(self.herdr.panes),
+        """Fetch the live session in one snapshot without blocking the UI."""
+
+        snapshot = await asyncio.to_thread(self.herdr.snapshot)
+        self._snapshot_layouts = snapshot_layouts(snapshot)
+        self._snapshot_tabs = list(snapshot.get("tabs") or [])
+        return (
+            list(snapshot.get("workspaces") or []),
+            list(snapshot.get("panes") or []),
         )
-        return workspaces, panes
 
     async def resolve_choice(self, target: str) -> tuple[str, str | None] | None | str:
         try:
@@ -2393,7 +2405,7 @@ class PickerApp(App[Result | None]):
         except HerdrError as error:
             self.set_error(str(error))
             return CANCELLED
-        mapping = self.mapping_reader()
+        mapping = self.mapping_reader(workspaces)
         label = workspace_label(target, self.names)
         unknown = unknown_workspaces(target, workspaces, panes, mapping, self.names)
         if not unknown:
@@ -2458,20 +2470,14 @@ class PickerApp(App[Result | None]):
         self, path: str
     ) -> tuple[list[str], set[tuple[str, str, str]]]:
         workspaces, panes = await self.herdr_state()
-        mapping = self.strict_mapping_reader()
+        mapping = self.strict_mapping_reader(workspaces)
         close_ids, agent_tuples, _ = snapshot_close_targets(
             path, workspaces, panes, mapping, self.names
         )
         return close_ids, agent_tuples
 
     async def _herdr_tabs(self) -> list[dict]:
-        tabs_fn = getattr(self.herdr, "tabs", None)
-        if not callable(tabs_fn):
-            return []
-        try:
-            return await asyncio.to_thread(tabs_fn)
-        except HerdrError:
-            return []
+        return self._snapshot_tabs
 
     async def refresh_workspace_state(self) -> None:
         try:
@@ -2481,7 +2487,7 @@ class PickerApp(App[Result | None]):
             self.set_rows()
             return
         raw_tabs = await self._herdr_tabs()
-        mapping = self.safe_mapping()
+        mapping = self.safe_mapping(workspaces)
         self.opened = open_paths(workspaces, panes, mapping, self.names)
         self.current = current_project(self.src_pane, panes, workspaces, mapping, self.names)
         self.agents = agents_by_path(workspaces, panes, mapping, self.names)
@@ -2633,7 +2639,7 @@ class PickerApp(App[Result | None]):
         except HerdrError as error:
             self.set_error(str(error))
             return
-        mapping = self.safe_mapping()
+        mapping = self.safe_mapping(workspaces)
         live_ids = {str(w.get("workspace_id")) for w in workspaces}
         target_ws = ""
         if row.is_tab and row.workspace_id in live_ids:
@@ -2662,18 +2668,24 @@ class PickerApp(App[Result | None]):
         moved_any = False
         destination: tuple[str, str] = ("", "")
         try:
+            layouts = self._snapshot_layouts
+            if not layouts:
+                layouts = snapshot_layouts(await asyncio.to_thread(self.herdr.snapshot))
+                self._snapshot_layouts = layouts
             for src_ws, tab_id, tab_label in to_move:
                 if target_ws and src_ws == target_ws:
                     continue
-                pane = next(
-                    (p for p in panes if str(p.get("tab_id") or "") == tab_id),
-                    None,
-                )
-                if pane is None or not pane.get("pane_id"):
-                    continue
-                layout = await asyncio.to_thread(
-                    self.herdr.pane_layout, str(pane["pane_id"])
-                )
+                layout = layouts.get(tab_id)
+                if layout is None:
+                    pane = next(
+                        (p for p in panes if str(p.get("tab_id") or "") == tab_id),
+                        None,
+                    )
+                    if pane is None or not pane.get("pane_id"):
+                        continue
+                    layout = await asyncio.to_thread(
+                        self.herdr.pane_layout, str(pane["pane_id"])
+                    )
                 created_ws, new_tab = await asyncio.to_thread(
                     move_tab_layout,
                     self.herdr,

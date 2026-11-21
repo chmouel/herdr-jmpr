@@ -72,10 +72,10 @@ class ScriptedHerdrTest(unittest.TestCase):
         executable = self.script(
             "import json, sys\n"
             f"open({str(args_file)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
-            "print(json.dumps({'result': {'workspaces': []}}))\n"
+            "print(json.dumps({'result': {'snapshot': {'workspaces': []}}}))\n"
         )
         self.assertEqual(Herdr(executable).workspaces(), [])
-        self.assertEqual(json.loads(args_file.read_text()), ["workspace", "list"])
+        self.assertEqual(json.loads(args_file.read_text()), ["api", "snapshot"])
 
     def test_run_failure_raises(self):
         executable = self.script("import sys\nsys.stderr.write('boom')\nsys.exit(3)\n")
@@ -139,6 +139,100 @@ class StatusSocketTest(unittest.TestCase):
         with self.assertRaises(HerdrError) as raised:
             Herdr(executable).status_socket()
         self.assertIn("server.socket", str(raised.exception))
+
+
+
+class SnapshotTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def script(self, body):
+        path = self.root / "herdr"
+        path.write_text("#!/usr/bin/env python3\n" + body)
+        path.chmod(0o755)
+        return str(path)
+
+    def payload(self):
+        return {
+            "result": {
+                "snapshot": {
+                    "workspaces": [{"workspace_id": "w1", "label": "proj"}],
+                    "tabs": [{"tab_id": "t1", "workspace_id": "w1", "label": "main"}],
+                    "panes": [
+                        {"pane_id": "p1", "tab_id": "t1", "workspace_id": "w1"},
+                    ],
+                    "layouts": [
+                        {
+                            "tab_id": "t1",
+                            "workspace_id": "w1",
+                            "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+                            "panes": [
+                                {
+                                    "pane_id": "p1",
+                                    "rect": {"x": 0, "y": 0, "width": 80, "height": 24},
+                                }
+                            ],
+                            "splits": [],
+                        }
+                    ],
+                }
+            }
+        }
+
+    def test_snapshot_reads_one_call(self):
+        args_file = self.root / "args"
+        executable = self.script(
+            "import json, sys\n"
+            f"open({str(args_file)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+            f"print(json.dumps({self.payload()!r}))\n"
+        )
+        snapshot = Herdr(executable).snapshot()
+        self.assertEqual(json.loads(args_file.read_text()), ["api", "snapshot"])
+        self.assertEqual(snapshot["workspaces"][0]["workspace_id"], "w1")
+        self.assertEqual(snapshot["tabs"][0]["label"], "main")
+
+    def test_snapshot_without_payload_raises(self):
+        executable = self.script("import json\nprint(json.dumps({'result': {}}))\n")
+        with self.assertRaises(HerdrError):
+            Herdr(executable).snapshot()
+
+    def test_layout_and_label_come_from_the_snapshot(self):
+        executable = self.script(
+            "import json\n" f"print(json.dumps({self.payload()!r}))\n"
+        )
+        herdr = Herdr(executable)
+        self.assertEqual(herdr.pane_layout("p1")["tab_id"], "t1")
+        self.assertEqual(herdr.tab_label("t1"), "main")
+
+    def test_unknown_pane_raises(self):
+        executable = self.script(
+            "import json\n" f"print(json.dumps({self.payload()!r}))\n"
+        )
+        with self.assertRaises(HerdrError):
+            Herdr(executable).pane_layout("absent")
+
+    def test_report_workspace_path_forwards_the_token(self):
+        args_file = self.root / "args"
+        executable = self.script(
+            "import json, sys\n"
+            f"open({str(args_file)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+            "print(json.dumps({'result': {}}))\n"
+        )
+        Herdr(executable).report_workspace_path("w1", "/src/proj")
+        self.assertEqual(
+            json.loads(args_file.read_text()),
+            [
+                "workspace",
+                "report-metadata",
+                "w1",
+                "--source",
+                "herdr-jmpr",
+                "--token",
+                "jmpr_path=/src/proj",
+            ],
+        )
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from herdr_jmpr.state import (
+    TOKEN_PATH,
     StateError,
     legacy_state_dir,
     lock_file,
@@ -308,3 +309,111 @@ class ImportTest(unittest.TestCase):
         with self.assertRaises(StateError) as raised:
             read_mapping(self.path)
         self.assertEqual(raised.exception.path, legacy)
+
+
+class TokenMappingTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name) / "state.json"
+
+    def test_file_wins_over_a_conflicting_token(self):
+        write_state(
+            self.path, {"instance": "1:2", "workspaces": {"w1": "/from-file"}}
+        )
+        workspaces = [{"workspace_id": "w1", "tokens": {TOKEN_PATH: "/stale-token"}}]
+        self.assertEqual(
+            read_live_mapping_strict(self.path, "1:2", workspaces), {"w1": "/from-file"}
+        )
+
+    def test_token_fills_a_workspace_missing_from_the_file(self):
+        write_state(self.path, {"instance": "1:2", "workspaces": {}})
+        workspaces = [
+            {"workspace_id": "w1", "tokens": {TOKEN_PATH: "/from-token"}},
+            {"workspace_id": "w2", "tokens": {"other": "x"}},
+        ]
+        self.assertEqual(
+            read_live_mapping_strict(self.path, "1:2", workspaces),
+            {"w1": "/from-token"},
+        )
+
+    def test_tokens_survive_a_new_server_instance(self):
+        write_state(self.path, {"instance": "old", "workspaces": {"w1": "/file"}})
+        workspaces = [{"workspace_id": "w1", "tokens": {TOKEN_PATH: "/token"}}]
+        self.assertEqual(
+            read_live_mapping_strict(self.path, "new", workspaces), {"w1": "/token"}
+        )
+
+    def test_dead_workspaces_are_dropped(self):
+        write_state(
+            self.path,
+            {"instance": "1:2", "workspaces": {"w1": "/a", "w9": "/stale"}},
+        )
+        workspaces = [{"workspace_id": "w1", "tokens": {}}]
+        self.assertEqual(
+            read_live_mapping_strict(self.path, "1:2", workspaces), {"w1": "/a"}
+        )
+
+    def test_hot_path_without_workspaces_stays_cheap(self):
+        write_state(self.path, {"instance": "1:2", "workspaces": {"w1": "/a"}})
+        self.assertEqual(read_live_mapping_strict(self.path, "1:2"), {"w1": "/a"})
+
+    def test_recover_keeps_the_file_and_fills_gaps_from_tokens(self):
+        mapping = {"instance": "same", "workspaces": {"w1": "/file"}}
+        recovered = recover(
+            mapping,
+            str(Path(self.temp.name) / "herdr.sock"),
+            "same",
+            {"w1", "w3"},
+            {"w1": "/stale-token", "w3": "/live"},
+        )
+        self.assertEqual(
+            recovered, {"instance": "same", "workspaces": {"w1": "/file", "w3": "/live"}}
+        )
+
+    def test_truncated_tokens_do_not_replace_the_full_path(self):
+        long_path = "/home/someone/" + "nested/" * 12 + "project"
+        assert len(long_path) > 80
+        write_state(
+            self.path, {"instance": "1:2", "workspaces": {"w1": long_path}}
+        )
+        workspaces = [{"workspace_id": "w1", "tokens": {TOKEN_PATH: long_path[:80]}}]
+        self.assertEqual(
+            read_live_mapping_strict(self.path, "1:2", workspaces), {"w1": long_path}
+        )
+
+    def test_recover_keeps_the_full_path_over_a_truncated_token(self):
+        long_path = "/home/someone/" + "nested/" * 12 + "project"
+        mapping = {"instance": "same", "workspaces": {"w1": long_path}}
+        recovered = recover(
+            mapping,
+            str(Path(self.temp.name) / "herdr.sock"),
+            "same",
+            {"w1"},
+            {"w1": long_path[:80]},
+        )
+        self.assertEqual(recovered["workspaces"], {"w1": long_path})
+
+    def test_a_failed_publish_does_not_resurrect_the_old_path(self):
+        write_state(
+            self.path, {"instance": "1:2", "workspaces": {"w1": "/src/proj-new"}}
+        )
+        workspaces = [{"workspace_id": "w1", "tokens": {TOKEN_PATH: "/src/proj-old"}}]
+        self.assertEqual(
+            read_live_mapping_strict(self.path, "1:2", workspaces),
+            {"w1": "/src/proj-new"},
+        )
+
+    def test_a_token_at_the_cap_is_not_trusted_as_an_exact_path(self):
+        capped = "/home/someone/" + "nested/" * 9 + "pro"  # exactly 80 characters
+        assert len(capped) == 80
+        write_state(self.path, {"instance": "1:2", "workspaces": {}})
+        workspaces = [{"workspace_id": "w1", "tokens": {TOKEN_PATH: capped}}]
+        self.assertEqual(read_live_mapping_strict(self.path, "1:2", workspaces), {})
+
+    def test_a_short_token_still_fills_a_gap(self):
+        write_state(self.path, {"instance": "1:2", "workspaces": {}})
+        workspaces = [{"workspace_id": "w1", "tokens": {TOKEN_PATH: "/src/proj"}}]
+        self.assertEqual(
+            read_live_mapping_strict(self.path, "1:2", workspaces), {"w1": "/src/proj"}
+        )

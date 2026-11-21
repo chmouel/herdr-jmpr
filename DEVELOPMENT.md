@@ -29,12 +29,12 @@ uv run python scripts/screenshots.py
 - `herdr_jmpr/frecency.py`: zsh-z and zoxide history, ranking, bucket order, tab and agent data
 - `herdr_jmpr/query.py`: fzf extended-search matcher, highlight spans, and match scoring
 - `herdr_jmpr/state.py`: canonical and legacy state, recovery, atomic writes, close snapshots
-- `herdr_jmpr/herdr.py`: Herdr CLI wrapper and split layout reconstruction
+- `herdr_jmpr/herdr.py`: Herdr CLI wrapper over the socket API (`api snapshot`), workspace tokens, and split layout reconstruction
 - `herdr_jmpr/picker.py`: backend resolution and the `fzf`, `skim`, and `gum` runners
 - `herdr_jmpr/tui.py`: Textual picker, tab tree, modals, and preview
 - `herdr_jmpr/cli.py`: flags, `open-picker`, lock transaction, and moves
 - `bin/herdr-jmpr`: launcher that uses the plugin virtualenv
-- `herdr-plugin.toml`: Herdr manifest (actions and popup panes)
+- `herdr-plugin.toml`: Herdr manifest (actions, popup panes, startup and event hooks)
 - `scripts/screenshots.py`: README screenshot generator
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for pull request expectations.

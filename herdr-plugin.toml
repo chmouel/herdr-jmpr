@@ -1,7 +1,7 @@
 id = "herdr-jmpr"
 name = "jmpr"
 version = "0.1.0"
-min_herdr_version = "0.9.0"
+min_herdr_version = "0.9.2"
 description = "Jump to project workspaces ranked by zsh-z or zoxide frecency"
 platforms = ["linux", "macos"]
 
@@ -10,6 +10,13 @@ command = ["uv", "sync", "--frozen"]
 
 [[startup]]
 command = ["uv", "sync", "--frozen"]
+
+[[startup]]
+command = ["bin/herdr-jmpr", "publish-state"]
+
+[[events]]
+on = "workspace.closed"
+command = ["bin/herdr-jmpr", "workspace-closed"]
 
 [[actions]]
 id = "jump"

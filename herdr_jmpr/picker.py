@@ -30,7 +30,7 @@ from .frecency import (
     tabs_by_path,
     workspace_worktree_path,
 )
-from .herdr import Herdr, HerdrError
+from .herdr import Herdr, snapshot_layout, snapshot_tab_label
 from .settings import BACKENDS
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -368,16 +368,14 @@ def build_result(
     if not src_pane:
         raise PickerError("No source pane to move (HERDR_ACTIVE_PANE_ID is unset)")
     result.kind = f"move-{move_mode}"
-    layout = herdr.pane_layout(src_pane)
+    snapshot = herdr.snapshot()
+    layout = snapshot_layout(snapshot, src_pane)
     result.src_layout = layout
     result.src_ws = layout.get("workspace_id", "")
     result.src_tab = layout.get("tab_id", "")
     result.tab_label = "moved"
     if move_mode == "tab":
-        try:
-            result.tab_label = herdr.tab_label(result.src_tab) or "moved"
-        except HerdrError:
-            result.tab_label = "moved"
+        result.tab_label = snapshot_tab_label(snapshot, result.src_tab) or "moved"
     return result
 
 
@@ -449,7 +447,7 @@ def _finalize_cli_selection(
     if move_mode or not target_workspace_id:
         workspaces = herdr.workspaces()
         panes = herdr.panes()
-        mapping = mapping_reader()
+        mapping = mapping_reader(workspaces)
         unknown = unknown_workspaces(target, workspaces, panes, mapping, names)
         if unknown:
             choice = _choose_workspace_cli(backend, target, unknown)
@@ -712,13 +710,11 @@ def run_skim(
         if key == "ctrl-x":
             if picked_path:
                 close_callback(picked_path)
-                workspaces = herdr.workspaces()
-                panes = herdr.panes()
-                try:
-                    raw_tabs = herdr.tabs()
-                except HerdrError:
-                    raw_tabs = []
-                mapping = mapping_reader()
+                snapshot = herdr.snapshot()
+                workspaces = snapshot.get("workspaces") or []
+                panes = snapshot.get("panes") or []
+                raw_tabs = snapshot.get("tabs") or []
+                mapping = mapping_reader(workspaces)
                 cur_opened = open_paths(workspaces, panes, mapping, names)
                 cur_project = current_project(src_pane, panes, workspaces, mapping, names)
                 cur_agents = agents_by_path(workspaces, panes, mapping, names)

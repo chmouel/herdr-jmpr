@@ -46,6 +46,20 @@ class StubHerdr(Herdr):
     def tab_label(self, tab_id: str) -> str:
         return self._label
 
+    def snapshot(self) -> dict:
+        return {
+            "workspaces": self.workspaces(),
+            "panes": self.panes(),
+            "tabs": [
+                {
+                    "tab_id": self._layout.get("tab_id"),
+                    "workspace_id": self._layout.get("workspace_id"),
+                    "label": self._label,
+                }
+            ],
+            "layouts": [dict(self._layout)],
+        }
+
 
 class BackendResolutionTest(unittest.TestCase):
     def test_default_and_precedence_cli_over_env_over_config(self):
@@ -214,7 +228,7 @@ class CliBackendsExecutionTest(unittest.TestCase):
                 show_all=False,
                 src_pane="p1",
                 herdr=herdr,
-                mapping_reader=lambda: {},
+                mapping_reader=lambda *_: {},
             )
         assert result is not None
         self.assertEqual(result.path, str(self.beta))
@@ -252,7 +266,7 @@ class CliBackendsExecutionTest(unittest.TestCase):
                 show_all=False,
                 src_pane="",
                 herdr=StubHerdr(),
-                mapping_reader=lambda: {},
+                mapping_reader=lambda *_: {},
             )
         assert result is not None
         self.assertEqual(result.path, str(typed.resolve()))
@@ -305,7 +319,7 @@ class CliBackendsExecutionTest(unittest.TestCase):
                 show_all=False,
                 src_pane="p1",
                 herdr=herdr,
-                mapping_reader=lambda: {},
+                mapping_reader=lambda *_: {},
                 history=[str(self.alpha), str(self.beta), str(self.extra)],
                 close_callback=lambda target: closed.append(target) or 0,
             )
@@ -336,7 +350,7 @@ class CliBackendsExecutionTest(unittest.TestCase):
                 show_all=False,
                 src_pane="",
                 herdr=StubHerdr(),
-                mapping_reader=lambda: {},
+                mapping_reader=lambda *_: {},
             )
         assert result is not None
         self.assertEqual(result.path, str(self.beta))

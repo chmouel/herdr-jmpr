@@ -24,6 +24,7 @@ class FakeHerdr:
         self.created = []
         self.focused = []
         self.tabs = []
+        self.published = []
 
     def workspaces(self):
         return list(self._workspaces)
@@ -31,11 +32,22 @@ class FakeHerdr:
     def panes(self):
         return list(self._panes)
 
+    def snapshot(self):
+        return {
+            "workspaces": self.workspaces(),
+            "panes": self.panes(),
+            "tabs": list(self.tabs),
+            "layouts": [],
+        }
+
     def workspace_create(self, cwd: str, label: str):
         workspace_id = f"w-{len(self._workspaces) + 1}"
         self.created.append((cwd, label))
         self._workspaces.append({"workspace_id": workspace_id, "label": label, "active_tab_id": "t"})
         return {"workspace_id": workspace_id}
+
+    def report_workspace_path(self, workspace_id: str, path: str):
+        self.published.append((workspace_id, path))
 
     def workspace_focus(self, workspace_id: str):
         self.focused.append(workspace_id)
@@ -183,7 +195,8 @@ class LockConcurrencyTest(unittest.TestCase):
                 "args = sys.argv[1:]\n"
                 "with open(os.environ['LOG'], 'a') as h: h.write(json.dumps(args)+'\\n')\n"
                 "data = json.load(open(os.environ['FIXTURE']))\n"
-                "if args[:2] == ['workspace','list']: out={'result':{'workspaces': data['workspaces']}}\n"
+                "if args[:2] == ['api','snapshot']: out={'result':{'snapshot':{'workspaces': data['workspaces'], 'panes': [], 'tabs': [], 'layouts': []}}}\n"
+                "elif args[:2] == ['workspace','list']: out={'result':{'workspaces': data['workspaces']}}\n"
                 "elif args[:2] == ['pane','list']: out={'result':{'panes':[]}}\n"
                 "elif args[:2] == ['workspace','create']:\n"
                 "  time.sleep(0.2)\n"
@@ -192,6 +205,13 @@ class LockConcurrencyTest(unittest.TestCase):
                 "  data['workspaces'] = [w for w in data['workspaces'] if w['workspace_id'] != ws['workspace_id']] + [ws]\n"
                 "  json.dump(data, open(os.environ['FIXTURE'], 'w'))\n"
                 "  out={'result':{'workspace':{'workspace_id':ws['workspace_id']}}}\n"
+                "elif args[:2] == ['workspace','report-metadata']:\n"
+                "  time.sleep(0.2)\n"
+                "  data.setdefault('tokens', {})[args[2]] = args[-1]\n"
+                "  json.dump(data, open(os.environ['FIXTURE'], 'w'))\n"
+                "  out={'result':{}}\n"
+                "elif args[:2] == ['workspace','focus']:\n"
+                "  out={'result':{}}\n"
                 "else: out={'result':{}}\n"
                 "print(json.dumps(out))\n"
             )
@@ -227,6 +247,92 @@ class LockConcurrencyTest(unittest.TestCase):
             with mock.patch.dict(os.environ, env, clear=False):
                 mapping = read_mapping(state_file(str(socket)))["workspaces"]
             self.assertEqual(mapping, {"w-A": str(target_a), "w-B": str(target_b)})
+            tokens = json.loads(fixture.read_text()).get("tokens") or {}
+            self.assertEqual(
+                tokens,
+                {workspace: f"jmpr_path={path}" for workspace, path in mapping.items()},
+                "a token published after the lock was released could go stale",
+            )
+
+
+class TokenPublishRaceTest(unittest.TestCase):
+    def test_concurrent_jumps_to_one_workspace_leave_a_matching_token(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            socket = root / "herdr.sock"
+            socket.touch()
+            target_a = root / "A"
+            target_b = root / "B"
+            target_a.mkdir()
+            target_b.mkdir()
+            fake = root / "herdr"
+            log = root / "calls.log"
+            fixture = root / "fixture.json"
+            fixture.write_text(json.dumps({"tokens": {}}))
+            fake.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys, time\n"
+                "args = sys.argv[1:]\n"
+                "with open(os.environ['LOG'], 'a') as h: h.write(json.dumps(args)+'\\n')\n"
+                "data = json.load(open(os.environ['FIXTURE']))\n"
+                "if args[:2] == ['api','snapshot']:\n"
+                "  out={'result':{'snapshot':{'workspaces':[{'workspace_id':'w1','label':'proj','active_tab_id':'t1'}],'panes':[],'tabs':[],'layouts':[]}}}\n"
+                "elif args[:2] == ['workspace','report-metadata']:\n"
+                "  time.sleep(0.2)\n"
+                "  data['tokens'][args[2]] = args[-1]\n"
+                "  json.dump(data, open(os.environ['FIXTURE'], 'w'))\n"
+                "  out={'result':{}}\n"
+                "elif args[:2] == ['workspace','focus']: out={'result':{}}\n"
+                "elif args[:2] == ['tab','focus']: out={'result':{}}\n"
+                "else: out={'result':{}}\n"
+                "print(json.dumps(out))\n"
+            )
+            fake.chmod(0o755)
+            env = os.environ | {
+                "HERDR_SOCKET_PATH": str(socket),
+                "XDG_STATE_HOME": str(root / "state"),
+                "HERDR_BIN_PATH": str(fake),
+                "LOG": str(log),
+                "HOME": str(root / "home"),
+                "FIXTURE": str(fixture),
+            }
+            (root / "home").mkdir()
+
+            def worker(path: str):
+                from herdr_jmpr import cli as _cli
+                from herdr_jmpr.herdr import Herdr as _Herdr
+                from herdr_jmpr.state import socket_instance as _instance
+                from herdr_jmpr.state import state_file as _state_file
+                from herdr_jmpr.tui import Result as _Result
+                os.environ.update(env)
+                _cli.jump(
+                    _Result(
+                        kind="jump",
+                        path=path,
+                        target_workspace_id="w1",
+                        target_tab_id="t1",
+                    ),
+                    _Herdr(str(fake)),
+                    str(socket),
+                    _instance(str(socket)),
+                    _state_file(str(socket)),
+                    {},
+                )
+
+            first = multiprocessing.Process(target=worker, args=(str(target_a),))
+            second = multiprocessing.Process(target=worker, args=(str(target_b),))
+            first.start()
+            second.start()
+            first.join(10)
+            second.join(10)
+            self.assertEqual(first.exitcode, 0)
+            self.assertEqual(second.exitcode, 0)
+
+            with mock.patch.dict(os.environ, env, clear=False):
+                mapping = read_mapping(state_file(str(socket)))["workspaces"]
+            self.assertIn(mapping.get("w1"), (str(target_a), str(target_b)))
+            token = json.loads(fixture.read_text())["tokens"]["w1"]
+            self.assertEqual(token, f"jmpr_path={mapping['w1']}")
 
 
 class PtyHangupTest(unittest.TestCase):
@@ -257,7 +363,8 @@ class PtyHangupTest(unittest.TestCase):
                 "args = sys.argv[1:]\n"
                 "with open(os.environ['LOG'], 'a') as h: h.write(json.dumps(args)+'\\n')\n"
                 "layout={'area': {'x':0,'y':0,'width':100,'height':50}, 'panes':[{'pane_id':'A','rect':{'x':0,'y':0,'width':60,'height':50}},{'pane_id':'B','rect':{'x':60,'y':0,'width':40,'height':50}}], 'splits':[{'direction':'right','ratio':0.6,'rect':{'x':0,'y':0,'width':100,'height':50}}], 'tab_id':'t-src','workspace_id':'src'}\n"
-                "if args[:2] == ['workspace','list']: out={'result':{'workspaces':[{'workspace_id':'src','label':'src','active_tab_id':'t-src'}]}}\n"
+                "if args[:2] == ['api','snapshot']: out={'result':{'snapshot':{'workspaces':[{'workspace_id':'src','label':'src','active_tab_id':'t-src'}], 'panes':[{'workspace_id':'src','pane_id':'A','tab_id':'t-src','cwd':%r},{'workspace_id':'src','pane_id':'B','tab_id':'t-src','cwd':%r}], 'tabs':[{'tab_id':'t-src','workspace_id':'src','label':'mytab'}], 'layouts':[layout]}}}\n"
+                "elif args[:2] == ['workspace','list']: out={'result':{'workspaces':[{'workspace_id':'src','label':'src','active_tab_id':'t-src'}]}}\n"
                 "elif args[:2] == ['pane','list']: out={'result':{'panes':[{'workspace_id':'src','pane_id':'A','tab_id':'t-src','cwd':%r},{'workspace_id':'src','pane_id':'B','tab_id':'t-src','cwd':%r}]}}\n"
                 "elif args[:2] == ['pane','layout']: out={'result':{'layout':layout}}\n"
                 "elif args[:2] == ['tab','get']: out={'result':{'tab':{'tab_id':'t-src','label':'mytab'}}}\n"
@@ -270,7 +377,7 @@ class PtyHangupTest(unittest.TestCase):
                 "  out={'result':{'move_result':{'changed':True,'pane':{'pane_id':'new-'+args[2],'tab_id':'t-new','workspace_id':workspace}}}}\n"
                 "else: out={'result':{}}\n"
                 "print(json.dumps(out))\n"
-                % (str(src), str(src), str(count), str(count), str(count))
+                % (str(src), str(src), str(src), str(src), str(count), str(count), str(count))
             )
             fake.chmod(0o755)
 

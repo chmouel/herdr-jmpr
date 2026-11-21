@@ -41,6 +41,7 @@ from .settings import START_MODES, Settings, SettingsError, load_settings
 from .state import (
     StateError,
     lock_file,
+    mapping_from_tokens,
     read_live_mapping,
     read_live_mapping_strict,
     read_mapping,
@@ -65,24 +66,52 @@ class Failure(Exception):
     pass
 
 
+def plugin_context() -> dict:
+    raw = os.environ.get("HERDR_PLUGIN_CONTEXT_JSON")
+    if not raw:
+        return {}
+    try:
+        context = json.loads(raw)
+    except ValueError:
+        return {}
+    return context if isinstance(context, dict) else {}
+
+
+def _context_id(context: dict, *keys: str) -> str:
+    for key in keys:
+        value = context.get(key)
+        if isinstance(value, str) and value:
+            return value
+        if isinstance(value, dict):
+            for nested in ("pane_id", "workspace_id", "tab_id", "id"):
+                candidate = value.get(nested)
+                if isinstance(candidate, str) and candidate:
+                    return candidate
+    return ""
+
+
 def active_pane_id() -> str:
     for variable in ("HERDR_ACTIVE_PANE_ID", "HERDR_PANE_ID"):
         value = os.environ.get(variable)
         if value:
             return value
-    raw = os.environ.get("HERDR_PLUGIN_CONTEXT_JSON")
-    if not raw:
-        return ""
-    try:
-        context = json.loads(raw)
-    except ValueError:
-        return ""
-    for key in ("focused_pane", "pane"):
-        value = context.get(key)
-        if isinstance(value, dict) and value.get("pane_id"):
-            return str(value["pane_id"])
-    pane_id = context.get("pane_id")
-    return str(pane_id) if pane_id else ""
+    return _context_id(plugin_context(), "focused_pane", "pane", "pane_id")
+
+
+def active_workspace_id() -> str:
+    for variable in ("HERDR_ACTIVE_WORKSPACE_ID", "HERDR_WORKSPACE_ID"):
+        value = os.environ.get(variable)
+        if value:
+            return value
+    return _context_id(plugin_context(), "workspace", "workspace_id")
+
+
+def active_tab_id() -> str:
+    for variable in ("HERDR_ACTIVE_TAB_ID", "HERDR_TAB_ID"):
+        value = os.environ.get(variable)
+        if value:
+            return value
+    return _context_id(plugin_context(), "tab", "tab_id")
 
 
 def ignore_hangup() -> None:
@@ -170,8 +199,15 @@ def open_picker(
         "popup",
     ]
     pane_id = active_pane_id()
+    workspace_id = active_workspace_id()
     if pane_id:
         command += ["--env", f"HERDR_ACTIVE_PANE_ID={pane_id}"]
+    if workspace_id:
+        command += ["--workspace", workspace_id]
+        command += ["--env", f"HERDR_ACTIVE_WORKSPACE_ID={workspace_id}"]
+    tab_id = active_tab_id()
+    if tab_id:
+        command += ["--env", f"HERDR_ACTIVE_TAB_ID={tab_id}"]
     if backend_override:
         command += ["--env", f"{BACKEND_ENV}={backend_override}"]
     if show_tabs_override is not None:
@@ -306,10 +342,17 @@ def jump(
     handle = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
     try:
         fcntl.flock(handle, fcntl.LOCK_EX)
-        workspaces = herdr.workspaces()
-        panes = herdr.panes()
+        snapshot = herdr.snapshot()
+        workspaces = snapshot.get("workspaces") or []
+        panes = snapshot.get("panes") or []
         live_ids = {str(workspace.get("workspace_id")) for workspace in workspaces}
-        state = recover(read_mapping(path), socket, instance, live_ids)
+        state = recover(
+            read_mapping(path),
+            socket,
+            instance,
+            live_ids,
+            mapping_from_tokens(workspaces),
+        )
         target_ws_id = getattr(result, "target_workspace_id", "") or ""
         target_tab_id = getattr(result, "target_tab_id", "") or ""
         if result.kind == "jump" and target_tab_id and target_ws_id in live_ids:
@@ -326,6 +369,7 @@ def jump(
                 destination, tab_id = move_source(result, destination, label, herdr)
         state["workspaces"][destination] = target
         write_state(path, state)
+        publish_workspace_path(herdr, destination, target)
     except BaseException:
         fcntl.flock(handle, fcntl.LOCK_UN)
         os.close(handle)
@@ -334,6 +378,17 @@ def jump(
     os.close(handle)
     focus_workspace(herdr, destination, tab_id)
     return 0
+
+
+def publish_workspace_path(herdr: Herdr, workspace_id: str, path: str) -> None:
+    """Best-effort workspace token update; jump and focus must still work."""
+
+    if not workspace_id or not path:
+        return
+    try:
+        herdr.report_workspace_path(workspace_id, path)
+    except (HerdrError, OSError):
+        pass
 
 
 def focus_workspace(herdr: Herdr, workspace_id: str, tab_id: str = "") -> None:
@@ -352,11 +407,12 @@ def _safe_tabs(herdr: Herdr) -> list[dict]:
 
 
 def _fetch_herdr_state(herdr: Herdr) -> tuple[list[dict], list[dict], list[dict]]:
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        ws_future = pool.submit(herdr.workspaces)
-        panes_future = pool.submit(herdr.panes)
-        tabs_future = pool.submit(_safe_tabs, herdr)
-        return ws_future.result(), panes_future.result(), tabs_future.result()
+    snapshot = herdr.snapshot()
+    return (
+        snapshot.get("workspaces") or [],
+        snapshot.get("panes") or [],
+        snapshot.get("tabs") or [],
+    )
 
 
 def _resolve_show_tabs(settings: Settings, override: bool | None) -> bool:
@@ -398,21 +454,17 @@ def interactive(
             # Warm the Textual import while the herdr and history I/O run.
             pool.submit(importlib.import_module, f"{__package__}.tui")
         socket_future = pool.submit(socket_path, herdr)
-        workspaces_future = pool.submit(herdr.workspaces)
-        panes_future = pool.submit(herdr.panes)
-        tabs_future = pool.submit(_safe_tabs, herdr)
+        snapshot_future = pool.submit(herdr.snapshot)
         history_future = pool.submit(read_history, source=settings.history)
         socket = socket_future.result()
-        workspaces = workspaces_future.result()
-        panes = panes_future.result()
-        raw_tabs = tabs_future.result()
+        snapshot = snapshot_future.result()
+        workspaces = snapshot.get("workspaces") or []
+        panes = snapshot.get("panes") or []
+        raw_tabs = snapshot.get("tabs") or []
         history = history_future.result()
     path = state_file(socket)
     instance = socket_instance(socket)
-    state = read_mapping(path)
-    mapping = (
-        dict(state["workspaces"]) if state.get("instance") == instance else {}
-    )
+    mapping = read_live_mapping_strict(path, instance, workspaces)
     pane_id = active_pane_id()
     opened = open_paths(workspaces, panes, mapping, names)
     current = current_project(pane_id, panes, workspaces, mapping, names)
@@ -420,7 +472,9 @@ def interactive(
     tabs = tabs_by_path(workspaces, raw_tabs, panes, mapping, names)
     paths_git = rank_paths(history, current, opened, False)
     paths_all = rank_paths(history, current, opened, True)
-    mapping_reader = lambda: read_live_mapping(path, instance)  # noqa: E731
+    mapping_reader = lambda workspaces=None: read_live_mapping(  # noqa: E731
+        path, instance, workspaces
+    )
 
     result: Result | None
     focus_after_exit: tuple[str, str] | None = None
@@ -483,11 +537,19 @@ def interactive(
             handle = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX)
-                live_ids = {str(w.get("workspace_id")) for w in herdr.workspaces()}
+                live = herdr.snapshot().get("workspaces") or []
+                live_ids = {str(w.get("workspace_id")) for w in live}
                 live_ids.add(ws_id)
-                cur = recover(read_mapping(path), socket, instance, live_ids)
+                cur = recover(
+                    read_mapping(path),
+                    socket,
+                    instance,
+                    live_ids,
+                    mapping_from_tokens(live),
+                )
                 cur["workspaces"][ws_id] = target_path
                 write_state(path, cur)
+                publish_workspace_path(herdr, ws_id, target_path)
             finally:
                 fcntl.flock(handle, fcntl.LOCK_UN)
                 os.close(handle)
@@ -503,7 +565,9 @@ def interactive(
             src_pane=pane_id,
             herdr=herdr,
             mapping_reader=mapping_reader,
-            strict_mapping_reader=lambda: read_live_mapping_strict(path, instance),
+            strict_mapping_reader=lambda workspaces=None: read_live_mapping_strict(
+                path, instance, workspaces
+            ),
             history=history,
             start_mode=start_mode,
             theme_setting=settings.theme,
@@ -538,7 +602,7 @@ def _refresh_row_files(
     open_env = os.environ.get(OPEN_ROWS_ENV)
     open_file = Path(open_env) if open_env and Path(open_env).parent.is_dir() else None
     workspaces, panes, raw_tabs = _fetch_herdr_state(herdr)
-    mapping = read_live_mapping(path, instance)
+    mapping = read_live_mapping(path, instance, workspaces)
     pane_id = active_pane_id()
     opened = open_paths(workspaces, panes, mapping, names)
     current = current_project(pane_id, panes, workspaces, mapping, names)
@@ -574,9 +638,10 @@ def close(path_argument: str, names: dict[str, str], herdr: Herdr) -> int:
     instance = socket_instance(socket)
     target = os.path.abspath(os.path.expanduser(path_argument))
     label = workspace_label(target, names)
-    mapping = read_live_mapping_strict(path, instance)
-    workspaces = herdr.workspaces()
-    panes = herdr.panes()
+    snapshot = herdr.snapshot()
+    workspaces = snapshot.get("workspaces") or []
+    panes = snapshot.get("panes") or []
+    mapping = read_live_mapping_strict(path, instance, workspaces)
     close_ids, agent_tuples, agent_names = snapshot_close_targets(
         target, workspaces, panes, mapping, names
     )
@@ -588,9 +653,10 @@ def close(path_argument: str, names: dict[str, str], herdr: Herdr) -> int:
         f"Close {label}? {', '.join(agent_names)} running there [y/N] "
     ):
         return 0
-    workspaces = herdr.workspaces()
-    panes = herdr.panes()
-    mapping = read_live_mapping_strict(path, instance)
+    snapshot = herdr.snapshot()
+    workspaces = snapshot.get("workspaces") or []
+    panes = snapshot.get("panes") or []
+    mapping = read_live_mapping_strict(path, instance, workspaces)
     current_ids, current_tuples, current_names = snapshot_close_targets(
         target, workspaces, panes, mapping, names
     )
@@ -605,6 +671,101 @@ def close(path_argument: str, names: dict[str, str], herdr: Herdr) -> int:
     for workspace_id in [w for w in current_ids if w in approved_ids]:
         herdr.workspace_close(workspace_id)
     _refresh_row_files(herdr, path, instance, names)
+    return 0
+
+
+def _acquire_lock(socket: str) -> int:
+    lock_path = lock_file(socket)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    return handle
+
+
+def _release_lock(handle: int) -> None:
+    fcntl.flock(handle, fcntl.LOCK_UN)
+    os.close(handle)
+
+
+def publish_state() -> int:
+    """Republish workspace tokens from the durable mapping (startup hook)."""
+
+    herdr = Herdr()
+    socket = socket_path(herdr)
+    instance = socket_instance(socket)
+    path = state_file(socket)
+    handle = _acquire_lock(socket)
+    try:
+        workspaces = herdr.snapshot().get("workspaces") or []
+        live_ids = {str(workspace.get("workspace_id")) for workspace in workspaces}
+        state = recover(
+            read_mapping(path),
+            socket,
+            instance,
+            live_ids,
+            mapping_from_tokens(workspaces),
+        )
+        write_state(path, state)
+        for workspace_id, target in state["workspaces"].items():
+            publish_workspace_path(herdr, workspace_id, target)
+    except StateError:
+        return 0
+    finally:
+        _release_lock(handle)
+    return 0
+
+
+def closed_workspace_id(raw: str) -> str:
+    """Workspace id from a plugin ``workspace.closed`` event payload."""
+
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return ""
+
+    def find(node) -> str:
+        if isinstance(node, dict):
+            workspace = node.get("workspace")
+            if isinstance(workspace, dict):
+                workspace_id = workspace.get("workspace_id")
+                if isinstance(workspace_id, str) and workspace_id:
+                    return workspace_id
+            workspace_id = node.get("workspace_id")
+            if isinstance(workspace_id, str) and workspace_id:
+                return workspace_id
+            for value in node.values():
+                found = find(value)
+                if found:
+                    return found
+        elif isinstance(node, list):
+            for value in node:
+                found = find(value)
+                if found:
+                    return found
+        return ""
+
+    return find(payload)
+
+
+def workspace_closed() -> int:
+    """Prune a closed workspace from durable state (event hook)."""
+
+    workspace_id = closed_workspace_id(os.environ.get("HERDR_PLUGIN_EVENT_JSON", ""))
+    if not workspace_id:
+        return 0
+    herdr = Herdr()
+    socket = socket_path(herdr)
+    path = state_file(socket)
+    handle = _acquire_lock(socket)
+    try:
+        state = read_mapping(path)
+        if workspace_id in state["workspaces"]:
+            del state["workspaces"][workspace_id]
+            write_state(path, state)
+    except StateError:
+        return 0
+    finally:
+        _release_lock(handle)
     return 0
 
 
@@ -673,6 +834,10 @@ def parse(
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     try:
+        if arguments == ["publish-state"]:
+            return publish_state()
+        if arguments == ["workspace-closed"]:
+            return workspace_closed()
         (
             move_mode,
             show_all,

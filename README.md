@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/chmouel/herdr-jmpr/actions/workflows/ci.yml/badge.svg)](https://github.com/chmouel/herdr-jmpr/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
-[![Herdr >= 0.9.0](https://img.shields.io/badge/herdr-%3E%3D%200.9.0-B48EF7)](https://herdr.dev)
+[![Herdr >= 0.9.2](https://img.shields.io/badge/herdr-%3E%3D%200.9.2-B48EF7)](https://herdr.dev)
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-D7FF64?logo=ruff&logoColor=black)](https://docs.astral.sh/ruff/)
 [![License: MIT](https://img.shields.io/github/license/chmouel/herdr-jmpr)](LICENSE)
 
@@ -30,7 +30,7 @@ uv sync
 herdr plugin link .
 ```
 
-Needs Herdr 0.9.0 or later, `uv`, Python 3.10 or later, and `git` (the preview
+Needs Herdr 0.9.2 or later, `uv`, Python 3.10 or later, and `git` (the preview
 pane reads repository status). The manifest runs `uv sync --frozen` on build and
 startup, so the virtualenv stays current.
 
@@ -130,6 +130,15 @@ popup can't interrupt them. Errors append to `<state dir>/last-error.log`.
 State lives in `${XDG_STATE_HOME:-~/.local/state}/herdr/plugins/state/herdr-jmpr`,
 or `HERDR_PLUGIN_STATE_DIR`. Each Herdr socket has a `<sha256>.json` mapping file
 and a `.lock` file.
+
+The mapping is also published to the running server as a `jmpr_path` workspace
+token, so other tools can read the project path and a fresh state file recovers
+from the running server. The file is written first under the state lock, so it
+always wins on conflict; a token only fills workspaces the file does not know.
+Herdr caps token values at 80 characters, so a token at the cap may be
+truncated and is ignored as an exact path. The startup hook republishes tokens after a restart, and a
+`workspace.closed` hook prunes the file. Reads use one `herdr api snapshot`
+round-trip, which keeps the picker consistent when workspaces change mid-flight.
 
 ## Development
 

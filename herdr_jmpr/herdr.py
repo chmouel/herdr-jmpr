@@ -7,6 +7,9 @@ import os
 import shutil
 import subprocess
 
+TOKEN_SOURCE = "herdr-jmpr"
+TOKEN_PATH = "jmpr_path"
+
 
 class HerdrError(Exception):
     pass
@@ -43,20 +46,31 @@ class Herdr:
     def result(self, *args: str) -> dict:
         return self.run(*args).get("result") or {}
 
+    def snapshot(self) -> dict:
+        """Read the whole live session in one socket round-trip."""
+
+        payload = self.result("api", "snapshot")
+        snapshot = payload.get("snapshot")
+        if not isinstance(snapshot, dict):
+            raise HerdrError(
+                "herdr api snapshot returned no snapshot: " + json.dumps(payload)
+            )
+        return snapshot
+
     def workspaces(self) -> list[dict]:
-        return self.result("workspace", "list").get("workspaces") or []
+        return self.snapshot().get("workspaces") or []
 
     def panes(self, workspace: str | None = None) -> list[dict]:
-        args = ["pane", "list"]
-        if workspace:
-            args += ["--workspace", workspace]
-        return self.result(*args).get("panes") or []
+        panes = self.snapshot().get("panes") or []
+        if not workspace:
+            return panes
+        return [pane for pane in panes if pane.get("workspace_id") == workspace]
 
     def tabs(self, workspace: str | None = None) -> list[dict]:
-        args = ["tab", "list"]
-        if workspace:
-            args += ["--workspace", workspace]
-        return self.result(*args).get("tabs") or []
+        tabs = self.snapshot().get("tabs") or []
+        if not workspace:
+            return tabs
+        return [tab for tab in tabs if tab.get("workspace_id") == workspace]
 
     def status_socket(self) -> str:
         response = self.run("status", "--json")
@@ -77,10 +91,23 @@ class Herdr:
         )
 
     def pane_layout(self, pane_id: str) -> dict:
-        return self.result("pane", "layout", "--pane", pane_id)["layout"]
+        return snapshot_layout(self.snapshot(), pane_id)
 
     def tab_label(self, tab_id: str) -> str | None:
-        return (self.result("tab", "get", tab_id).get("tab") or {}).get("label")
+        return snapshot_tab_label(self.snapshot(), tab_id)
+
+    def report_workspace_path(self, workspace_id: str, path: str) -> None:
+        """Publish the project path as a workspace token for other tools."""
+
+        self.run(
+            "workspace",
+            "report-metadata",
+            workspace_id,
+            "--source",
+            TOKEN_SOURCE,
+            "--token",
+            f"{TOKEN_PATH}={path}",
+        )
 
     def pane_move(self, *args: str) -> dict:
         command = ["pane", "move", *args, "--no-focus"]
@@ -109,6 +136,40 @@ class Herdr:
 
     def workspace_close(self, workspace_id: str) -> None:
         self.run("workspace", "close", workspace_id)
+
+
+def snapshot_layouts(snapshot: dict) -> dict[str, dict]:
+    return {
+        str(layout.get("tab_id")): layout
+        for layout in snapshot.get("layouts") or []
+        if layout.get("tab_id")
+    }
+
+
+def snapshot_layout(snapshot: dict, pane_id: str) -> dict:
+    pane = next(
+        (item for item in snapshot.get("panes") or [] if item.get("pane_id") == pane_id),
+        None,
+    )
+    if pane is not None:
+        tab_id = str(pane.get("tab_id") or "")
+        layout = snapshot_layouts(snapshot).get(tab_id)
+        if layout is not None:
+            return layout
+    for layout in snapshot.get("layouts") or []:
+        if any(item.get("pane_id") == pane_id for item in layout.get("panes") or []):
+            return layout
+    if pane is None:
+        raise HerdrError(f"pane {pane_id} is not in the herdr snapshot")
+    raise HerdrError(f"tab {pane.get('tab_id')} has no layout in the herdr snapshot")
+
+
+def snapshot_tab_label(snapshot: dict, tab_id: str) -> str | None:
+    for tab in snapshot.get("tabs") or []:
+        if tab.get("tab_id") == tab_id:
+            label = tab.get("label")
+            return str(label) if label else None
+    return None
 
 
 def _same(left: dict, right: dict) -> bool:

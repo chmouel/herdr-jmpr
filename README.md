@@ -42,8 +42,9 @@ startup, so the virtualenv stays current.
 | Move pane to project workspace | Move the focused pane there |
 | Move tab to project workspace | Move the focused tab there, keeping its split layout |
 | Jump to directory (all zsh-z / zoxide) | Pick from every history directory, not only git roots |
+| Switch to a running agent | Open the picker on the flat agent-only list (`tab` view) |
 
-Each action opens in an 80% by 80% popup.
+Each action opens in a 99% by 99% popup.
 
 ## Configuration
 
@@ -101,6 +102,9 @@ directory.
   what is running (`π` pi, `✻` Claude Code, and so on).
 - `alt+e` (or `e` in normal mode) shows or hides the tab tree. Use `←`/`→` to fold
   a workspace.
+- In normal mode, `tab` switches to a flat list of the tabs running an agent, and
+  `tab` again returns to the full tree. The `Switch to a running agent` action
+  (`--agents`) opens the picker directly in that view.
 - In normal mode, `y` marks tabs, `p` pastes them into the row under the cursor
   and jumps to the moved tab, and `Esc` clears the marks. With no marks, `p`
   moves the pane.

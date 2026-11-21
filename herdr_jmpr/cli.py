@@ -54,7 +54,8 @@ from .state import (
 )
 
 USAGE = (
-    "usage: herdr-jmpr [--move-pane|--move-tab] [--all] [--tabs|--no-tabs] "
+    "usage: herdr-jmpr [--move-pane|--move-tab] [--all] [--agents] "
+    "[--tabs|--no-tabs] "
     "[--vim|--no-vim|--normal|--insert|--mode <insert|normal>] [--backend <backend>]"
 )
 PLUGIN_ID = "herdr-jmpr"
@@ -173,6 +174,7 @@ def socket_path(herdr: Herdr) -> str:
 def open_picker(
     move_mode: str | None,
     show_all: bool,
+    agents_only: bool = False,
     backend_override: str | None = None,
     show_tabs_override: bool | None = None,
     start_mode_override: str | None = None,
@@ -181,6 +183,8 @@ def open_picker(
         entrypoint = "move-pane"
     elif move_mode == "tab":
         entrypoint = "move-tab"
+    elif agents_only:
+        entrypoint = "jump-agents"
     elif show_all:
         entrypoint = "jump-all"
     else:
@@ -203,7 +207,8 @@ def open_picker(
     if pane_id:
         command += ["--env", f"HERDR_ACTIVE_PANE_ID={pane_id}"]
     if workspace_id:
-        command += ["--workspace", workspace_id]
+        # A popup targets the active pane, so herdr rejects --workspace here; the
+        # workspace still reaches the picker through the environment.
         command += ["--env", f"HERDR_ACTIVE_WORKSPACE_ID={workspace_id}"]
     tab_id = active_tab_id()
     if tab_id:
@@ -438,6 +443,7 @@ def interactive(
     move_mode: str | None,
     show_all: bool,
     settings: Settings,
+    agents_only: bool = False,
     backend_override: str | None = None,
     show_tabs_override: bool | None = None,
     start_mode_override: str | None = None,
@@ -771,9 +777,12 @@ def workspace_closed() -> int:
 
 def parse(
     argv: list[str],
-) -> tuple[str | None, bool, bool, str | None, str | None, bool | None, str | None]:
+) -> tuple[
+    str | None, bool, bool, bool, str | None, str | None, bool | None, str | None
+]:
     move_mode: str | None = None
     show_all = False
+    agents_only = False
     open_picker_mode = False
     close_path: str | None = None
     backend_override: str | None = None
@@ -788,6 +797,8 @@ def parse(
             move_mode = "tab"
         elif argument == "--all":
             show_all = True
+        elif argument == "--agents":
+            agents_only = True
         elif argument == "--tabs":
             show_tabs_override = True
         elif argument == "--no-tabs":
@@ -823,6 +834,7 @@ def parse(
     return (
         move_mode,
         show_all,
+        agents_only,
         open_picker_mode,
         close_path,
         backend_override,
@@ -841,6 +853,7 @@ def main(argv: list[str] | None = None) -> int:
         (
             move_mode,
             show_all,
+            agents_only,
             picker,
             close_path,
             backend_override,
@@ -866,6 +879,7 @@ def main(argv: list[str] | None = None) -> int:
             return open_picker(
                 move_mode,
                 show_all,
+                agents_only,
                 backend_override,
                 show_tabs_override,
                 start_mode_override,
@@ -876,6 +890,7 @@ def main(argv: list[str] | None = None) -> int:
             move_mode,
             show_all,
             settings,
+            agents_only,
             backend_override,
             show_tabs_override,
             start_mode_override,

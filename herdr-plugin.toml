@@ -37,6 +37,12 @@ contexts = ["pane", "tab", "workspace", "global"]
 command = ["bin/herdr-jmpr", "open-picker", "--move-tab"]
 
 [[actions]]
+id = "jump-agents"
+title = "Switch to a running agent…"
+contexts = ["pane", "tab", "workspace", "global"]
+command = ["bin/herdr-jmpr", "open-picker", "--agents"]
+
+[[actions]]
 id = "jump-all"
 title = "Jump to directory (all zsh-z / zoxide)…"
 contexts = ["pane", "tab", "workspace", "global"]
@@ -46,30 +52,38 @@ command = ["bin/herdr-jmpr", "open-picker", "--all"]
 id = "jump"
 title = "jmpr"
 placement = "popup"
-width = "80%"
-height = "80%"
+width = "99%"
+height = "99%"
 command = ["bin/herdr-jmpr"]
 
 [[panes]]
 id = "move-pane"
 title = "jmpr: move pane"
 placement = "popup"
-width = "80%"
-height = "80%"
+width = "99%"
+height = "99%"
 command = ["bin/herdr-jmpr", "--move-pane"]
 
 [[panes]]
 id = "move-tab"
 title = "jmpr: move tab"
 placement = "popup"
-width = "80%"
-height = "80%"
+width = "99%"
+height = "99%"
 command = ["bin/herdr-jmpr", "--move-tab"]
+
+[[panes]]
+id = "jump-agents"
+title = "jmpr: agents"
+placement = "popup"
+width = "99%"
+height = "99%"
+command = ["bin/herdr-jmpr", "--agents"]
 
 [[panes]]
 id = "jump-all"
 title = "jmpr: all dirs"
 placement = "popup"
-width = "80%"
-height = "80%"
+width = "99%"
+height = "99%"
 command = ["bin/herdr-jmpr", "--all"]

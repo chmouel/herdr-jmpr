@@ -168,6 +168,7 @@ class Row:
     marker: str
     label: str
     agents: tuple[str, ...] = ()
+    flat: bool = False
     workspace_id: str = ""
     tab_id: str = ""
     is_tab: bool = False
@@ -549,7 +550,7 @@ class RowList(ScrollView, can_focus=False):
         line.append(f"{self.POINTER} " if selected else "  ", style=pointer_style)
 
         if row.is_tab:
-            prefix = f"  {row.tree_prefix or TREE_LAST}"
+            prefix = "    " if row.flat else f"  {row.tree_prefix or TREE_LAST}"
             line.append(
                 prefix,
                 style=(
@@ -868,10 +869,8 @@ HELP_GROUPS = [
         "Global",
         [
             ("enter", "jump / accept"),
-            ("alt-p", "move pane here"),
-            ("alt-t", "move tab here"),
-            ("alt-a", "git / all dirs"),
-            ("alt-o", "open workspaces"),
+            ("alt-p/t", "move pane / tab"),
+            ("alt-a/o", "git/all / open"),
             ("alt-e", "toggle tab tree"),
             ("alt-v", "toggle preview"),
             ("ctrl-t", "switch theme"),
@@ -900,6 +899,7 @@ HELP_GROUPS = [
             ("i a /", "insert mode"),
             ("dd", "clear query"),
             ("o e", "open / tab tree"),
+            ("tab", "agents only"),
             ("v", "toggle preview"),
             ("T", "switch theme"),
             ("x", "close workspace"),
@@ -1126,6 +1126,8 @@ class PickerApp(App[Result | None]):
         agents: dict[str, tuple[str, ...]] | None = None,
         tabs: dict[str, tuple[TabEntry, ...]] | None = None,
         show_tabs: bool = True,
+        agents_only: bool = False,
+        show_preview: bool = False,
         record_workspace: Callable[[str, str], None] | None = None,
     ) -> None:
         super().__init__()
@@ -1150,6 +1152,7 @@ class PickerApp(App[Result | None]):
             )
         self.tabs: dict[str, tuple[TabEntry, ...]] = dict(tabs) if tabs else {}
         self.show_tabs = show_tabs
+        self.agents_only = agents_only
         self.collapsed_paths: set[str] = set()
         self.yanked_tabs: dict[str, tuple[str, str, str]] = {}
         self.focus_after_exit: tuple[str, str] | None = None
@@ -1314,6 +1317,8 @@ class PickerApp(App[Result | None]):
         return self.paths[self.scope]
 
     def build_rows(self) -> list[Row]:
+        if self.agents_only:
+            return self._agent_rows()
         rows = []
         include_tabs = self.show_tabs and self.move_mode is None
         for path in self.active_paths():
@@ -1368,6 +1373,33 @@ class PickerApp(App[Result | None]):
                     )
         return rows
 
+    def _agent_rows(self) -> list[Row]:
+        """Flat list of open tabs that have an agent running."""
+
+        rows: list[Row] = []
+        for path in self.active_paths():
+            for tab in self.tabs.get(path) or ():
+                if not tab.agents:
+                    continue
+                rows.append(
+                    Row(
+                        path=path,
+                        shown=tab.label,
+                        marker=" ",
+                        label=workspace_label(path, self.names),
+                        agents=tab.agents,
+                        workspace_id=tab.workspace_id,
+                        tab_id=tab.tab_id,
+                        is_tab=True,
+                        flat=True,
+                        agent_status=tab.agent_status,
+                        tab_active=tab.active,
+                        tab_focused=tab.focused,
+                        yanked=(tab.tab_id in self.yanked_tabs),
+                    )
+                )
+        return rows
+
     def set_rows(self) -> None:
         self.rows = self.build_rows()
         self.apply_filter(keep_selection=True)
@@ -1379,6 +1411,8 @@ class PickerApp(App[Result | None]):
                 f"  \u23ce  Open directory {display_path(typed)}",
                 f"bold {palette.success}",
             )
+        if self.agents_only:
+            return ("  No agents running \u00b7 press tab for all", palette.muted)
         if self.scope == "open":
             scope_tip = "no open workspaces \u00b7 press M-o for all"
             return (f"  {scope_tip.capitalize()}", palette.muted)
@@ -1419,7 +1453,14 @@ class PickerApp(App[Result | None]):
         self.filtered = []
         self.spans = []
         groups = parse(self.query)
-        if not groups:
+        if self.agents_only:
+            for row in self.rows:
+                row_spans = self._match_tab_row(groups, row) if groups else []
+                if row_spans is None:
+                    continue
+                self.filtered.append(row)
+                self.spans.append(row_spans)
+        elif not groups:
             for row in self.rows:
                 self.filtered.append(row)
                 self.spans.append([])
@@ -1682,6 +1723,10 @@ class PickerApp(App[Result | None]):
             line.append(f" {n} yanked ", style=self.chip_style("warning"))
             line.append(" ")
 
+        if self.agents_only:
+            line.append(" agents only ", style=self.chip_style("success"))
+            line.append(" ")
+
         prompt = f"{self.scope} \u203a "
         line.append(prompt, style=f"bold {palette.primary}")
 
@@ -1780,6 +1825,7 @@ class PickerApp(App[Result | None]):
                 ("j/k", "move"),
                 ("i", "filter"),
                 ("dd", "clear"),
+                ("tab", "agents"),
                 ("p/t", "move"),
                 ("x", "close"),
                 ("?", "help"),
@@ -1791,6 +1837,7 @@ class PickerApp(App[Result | None]):
                 ("j/k", "move"),
                 ("i/a/\u2571", "filter"),
                 ("dd", "clear"),
+                ("tab", "agents"),
                 ("v", "preview"),
                 ("p", "pane"),
                 ("t", "tab"),
@@ -2542,6 +2589,11 @@ class PickerApp(App[Result | None]):
         self.show_tabs = not self.show_tabs
         self.set_rows()
 
+    def toggle_agents_only(self) -> None:
+        self.agents_only = not self.agents_only
+        self.index = 0
+        self.set_rows()
+
     def collapse_selected(self) -> None:
         if not self.show_tabs or self.move_mode is not None:
             return
@@ -2866,6 +2918,7 @@ class PickerApp(App[Result | None]):
         "/": lambda self: self.set_mode("insert"),
         "d": lambda self: self._start_pending("d"),
         "C": lambda self: (self.clear_query(), self.set_mode("insert")),
+        "tab": lambda self: self.toggle_agents_only(),
         "v": lambda self: self.toggle_preview(),
         "T": lambda self: self.open_theme_picker(),
         "x": lambda self: self.close_current(),

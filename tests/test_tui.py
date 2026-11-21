@@ -1658,6 +1658,54 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.filtered[1].tab_id, "w1:t1")
             self.assertEqual(app.filtered[1].tree_prefix, "└─ ")
 
+    async def test_tab_in_normal_mode_toggles_flat_agents_only_view(self):
+        app = self.make_app()
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            await pilot.press("escape")
+            await pilot.press("tab")
+            await pilot.pause()
+
+            # Only the agent tab remains, without workspace parents or tree prefixes.
+            self.assertEqual(len(visible(app)), 1)
+            row = visible(app)[0]
+            self.assertTrue(row.is_tab)
+            self.assertTrue(row.flat)
+            self.assertEqual(row.tab_id, "w1:t1")
+            self.assertEqual(row.agents, ("pi",))
+            self.assertEqual(row.tree_prefix, "")
+            line = app.row_list._row_text(0, 90).plain
+            self.assertNotIn("\u251c\u2500", line)
+            self.assertNotIn("\u2514\u2500", line)
+            self.assertIn("Analyze Local Changes", line)
+            self.assertIn("agents only", app._query_text(100).plain)
+
+            # Filtering inside the flat view still matches on the agent badge.
+            app.insert_text("agent")
+            await pilot.pause()
+            self.assertEqual(len(visible(app)), 1)
+            self.assertTrue(visible(app)[0].flat)
+
+            await pilot.press("d")
+            await pilot.press("d")
+            await pilot.press("tab")
+            await pilot.pause()
+            self.assertEqual(len(visible(app)), 5)
+            self.assertFalse(any(row.flat for row in app.filtered))
+            self.assertTrue(app.filtered[1].is_tab)
+
+    async def test_agents_only_app_starts_in_flat_view(self):
+        app = self.make_app(agents_only=True)
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            self.assertTrue(app.agents_only)
+            self.assertEqual(len(visible(app)), 1)
+            self.assertEqual(visible(app)[0].tab_id, "w1:t1")
+            await pilot.press("escape")
+            await pilot.press("tab")
+            await pilot.pause()
+            self.assertEqual(len(visible(app)), 5)
+
     async def test_collapse_and_expand_with_left_right_toggles_workspace_agents(self):
         app = self.make_app()
         async with app.run_test(size=(100, 24)) as pilot:

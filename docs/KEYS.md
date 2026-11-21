@@ -38,6 +38,7 @@
 | `escape` | clear the marks; with no marks, quit |
 | `x` | close the project workspace |
 | `o` | open workspaces only |
+| `tab` | show only agent tabs, flat, without the workspace tree |
 | `e` | show or hide the tab tree |
 | `v` | show or hide the preview |
 | `T` | switch theme |

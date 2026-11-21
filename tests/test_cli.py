@@ -145,7 +145,8 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(
             stderr.strip(),
-            "usage: herdr-jmpr [--move-pane|--move-tab] [--all] [--tabs|--no-tabs] "
+            "usage: herdr-jmpr [--move-pane|--move-tab] [--all] [--agents] "
+            "[--tabs|--no-tabs] "
             "[--vim|--no-vim|--normal|--insert|--mode <insert|normal>] [--backend <backend>]",
         )
 
@@ -210,6 +211,10 @@ class CliTest(unittest.TestCase):
             environment={
                 "HERDR_BIN_PATH": str(fake.executable),
                 "HERDR_ACTIVE_PANE_ID": "A",
+                "HERDR_ACTIVE_WORKSPACE_ID": "",
+                "HERDR_WORKSPACE_ID": "",
+                "HERDR_ACTIVE_TAB_ID": "",
+                "HERDR_TAB_ID": "",
             },
         )
         self.assertEqual(code, 0)
@@ -236,6 +241,7 @@ class CliTest(unittest.TestCase):
         for arguments, expected in (
             ([], "jump"),
             (["--all"], "jump-all"),
+            (["--agents"], "jump-agents"),
             (["--move-tab"], "move-tab"),
         ):
             with self.subTest(arguments=arguments):

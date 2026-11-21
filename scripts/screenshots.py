@@ -141,6 +141,7 @@ def make_app(state: dict, *, start_mode: str = "insert", theme: str = "herdr-ink
         agents=state["agents"],
         tabs=state["tabs"],
         show_tabs=True,
+        show_preview=True,
     )
 
 

@@ -582,6 +582,8 @@ def interactive(
             agents=agents,
             tabs=tabs,
             show_tabs=show_tabs,
+            agents_only=agents_only,
+            show_preview=settings.show_preview,
             record_workspace=record_workspace,
         )
         result = app.run()

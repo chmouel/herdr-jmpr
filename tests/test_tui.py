@@ -250,7 +250,7 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotEqual(app.index, 0)
 
     async def test_first_preview_loads_at_once_and_prefetches_the_next_row(self):
-        app = self.app()
+        app = self.app(show_preview=True)
         async with app.run_test(size=(120, 40)) as pilot:
             self.assertIsNone(app._preview_timer)
             for _ in range(200):
@@ -445,8 +445,19 @@ class PickerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(app.return_value)
         self.assertEqual(app.return_value.path, os.path.abspath(self.other))
 
-    async def test_preview_shown_on_wide_terminal(self):
+    async def test_preview_is_hidden_by_default_and_toggles_on(self):
         app = self.app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            self.assertFalse(app.query_one("#preview").display)
+            await pilot.press("alt+v")
+            await pilot.pause()
+            self.assertTrue(app.query_one("#preview").display)
+            self.assertIsNotNone(app.preview_data)
+            self.assertEqual(app.preview_data.path, self.repo)
+
+    async def test_preview_shown_on_wide_terminal_when_enabled(self):
+        app = self.app(show_preview=True)
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
             preview = app.query_one("#preview")
@@ -1213,7 +1224,7 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(bar), app.query_one("#query").content_size.width)
 
     async def test_preview_renders_sections_with_a_key_column(self):
-        app = self.app()
+        app = self.app(show_preview=True)
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
             app.preview_data = PreviewData(
@@ -1412,7 +1423,7 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("\n", bar)
 
     async def test_preview_keeps_every_workspace_detail(self):
-        app = self.app()
+        app = self.app(show_preview=True)
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
             app.preview_data = PreviewData(
@@ -1543,7 +1554,7 @@ class PresentationTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(SettingsError):
             self.app(theme_setting="no-such-theme")
 
-        app = self.app(theme_setting="herdr-ink")
+        app = self.app(theme_setting="herdr-ink", show_preview=True)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             self.assertTrue(app.query_one("#preview").display)

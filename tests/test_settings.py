@@ -117,6 +117,15 @@ class SettingsTest(unittest.TestCase):
         with self.assertRaises(SettingsError):
             load_settings(cfg)
 
+    def test_show_preview_defaults_false_and_validates_boolean(self):
+        self.assertFalse(load_settings(self.root / "missing.toml").show_preview)
+        cfg = self.root / "config.toml"
+        cfg.write_text("show_preview = true\n")
+        self.assertTrue(load_settings(cfg).show_preview)
+        cfg.write_text('show_preview = "yes"\n')
+        with self.assertRaises(SettingsError):
+            load_settings(cfg)
+
     def test_path_falls_back_to_the_xdg_config_home(self):
         with mock.patch.dict(
             os.environ, {"XDG_CONFIG_HOME": str(self.root)}, clear=False

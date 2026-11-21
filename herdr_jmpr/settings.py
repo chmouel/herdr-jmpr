@@ -17,7 +17,7 @@ BACKENDS = ("textual", "auto", "fzf", "skim", "gum")
 START_MODES = ("insert", "normal")
 HISTORY_SOURCES = ("auto", "zshz", "zoxide")
 
-KNOWN_KEYS = {"backend", "start_mode", "theme", "history", "show_tabs"}
+KNOWN_KEYS = {"backend", "start_mode", "theme", "history", "show_tabs", "show_preview"}
 
 
 class SettingsError(Exception):
@@ -36,6 +36,8 @@ class Settings:
     history: str = "auto"
     # Show open workspace tabs as a Unicode tree under each open workspace.
     show_tabs: bool = True
+    # Show the preview pane beside the list; ``alt+v`` toggles it at runtime.
+    show_preview: bool = False
 
 
 def settings_path() -> Path:
@@ -100,10 +102,14 @@ def load_settings(path: Path | None = None) -> Settings:
     show_tabs = data.get("show_tabs", Settings.show_tabs)
     if not isinstance(show_tabs, bool):
         raise SettingsError(f"Invalid {path}: show_tabs must be a boolean")
+    show_preview = data.get("show_preview", Settings.show_preview)
+    if not isinstance(show_preview, bool):
+        raise SettingsError(f"Invalid {path}: show_preview must be a boolean")
     return Settings(
         backend=backend,
         start_mode=start_mode,
         theme=theme.strip(),
         history=history,
         show_tabs=show_tabs,
+        show_preview=show_preview,
     )

@@ -1168,7 +1168,7 @@ class PickerApp(App[Result | None]):
         self.spans: list[list[tuple[int, int]]] = []
         self.index = 0
         self.preview_data: PreviewData | None = None
-        self.preview_override: bool | None = None
+        self.preview_override: bool | None = None if show_preview else False
         self._preview_path = ""
         self._preview_cache: dict[str, PreviewData] = {}
         self._preview_generation = 0

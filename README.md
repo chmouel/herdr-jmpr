@@ -74,6 +74,7 @@ theme = "auto"          # follows Herdr's theme, or any Textual theme name
 start_mode = "insert"   # insert | normal
 history = "auto"        # auto (zsh-z, then zoxide) | zshz | zoxide
 show_tabs = true        # tab tree under open workspaces
+show_preview = false    # preview pane beside the list, toggled with alt+v
 ```
 
 Invalid keys or values print `Invalid <path>: ...` and exit 1.
@@ -98,6 +99,8 @@ directory.
   negates, `^prefix` and `suffix$` anchor, `'exact` matches a substring. Smartcase
   applies.
 - `enter` jumps. A typed existing path (`/…` or `~/…`) wins over the highlighted row.
+- Preview is off by default. `alt+v` (or `v` in normal mode) shows or hides
+  the preview pane; `show_preview = true` starts with it on.
 - `◆` marks the current project, `●` marks open workspaces, and agent icons show
   what is running (`π` pi, `✻` Claude Code, and so on).
 - `alt+e` (or `e` in normal mode) shows or hides the tab tree. Use `←`/`→` to fold

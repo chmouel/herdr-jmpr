@@ -7,6 +7,7 @@
 | typing | filter (fzf extended search, smartcase) |
 | `down`/`up`, `ctrl+n`/`ctrl+p`, `ctrl+j`/`ctrl+k` | move the selection |
 | `page_down`/`page_up`, `ctrl+f`/`ctrl+b` | page |
+| `alt+1`..`alt+0` | jump to the numbered row (first 10) |
 | `ctrl+a`/`ctrl+e` | start / end of the query |
 | `ctrl+u` | delete to start |
 | `ctrl+w`, `alt+backspace` | delete the previous word or path segment |
@@ -22,6 +23,7 @@
 | Key | Action |
 | --- | --- |
 | `j`/`k`/`down`/`up` | move the selection |
+| `1`..`9`, `0` | jump to the numbered row (first 10) |
 | `gg` / `G` | first / last item |
 | `ctrl+d`/`ctrl+u` | half page |
 | `ctrl+f`/`ctrl+b` | full page |

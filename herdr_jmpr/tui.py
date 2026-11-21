@@ -547,7 +547,12 @@ class RowList(ScrollView, can_focus=False):
         keep_tokens = not selected or tinted
 
         pointer_style = f"bold {palette.primary}" if keep_tokens else "bold"
-        line.append(f"{self.POINTER} " if selected else "  ", style=pointer_style)
+        line.append(self.POINTER if selected else " ", style=pointer_style)
+        line.append(
+            str((index + 1) % 10) if index < 10 else " ",
+            style=palette.muted if keep_tokens else "",
+        )
+        line.append(" ")
 
         if row.is_tab:
             prefix = "    " if row.flat else f"  {row.tree_prefix or TREE_LAST}"
@@ -2856,6 +2861,16 @@ class PickerApp(App[Result | None]):
         self.pending = character
 
     KEY_INSERT = {
+        "alt+1": lambda self: self.select_row_at(0, activate=True),
+        "alt+2": lambda self: self.select_row_at(1, activate=True),
+        "alt+3": lambda self: self.select_row_at(2, activate=True),
+        "alt+4": lambda self: self.select_row_at(3, activate=True),
+        "alt+5": lambda self: self.select_row_at(4, activate=True),
+        "alt+6": lambda self: self.select_row_at(5, activate=True),
+        "alt+7": lambda self: self.select_row_at(6, activate=True),
+        "alt+8": lambda self: self.select_row_at(7, activate=True),
+        "alt+9": lambda self: self.select_row_at(8, activate=True),
+        "alt+0": lambda self: self.select_row_at(9, activate=True),
         "down": lambda self: self.set_index(self.index + 1),
         "up": lambda self: self.set_index(self.index - 1),
         "left": lambda self: self.collapse_selected(),
@@ -2892,6 +2907,26 @@ class PickerApp(App[Result | None]):
     }
 
     KEY_NORMAL = {
+        "1": lambda self: self.select_row_at(0, activate=True),
+        "2": lambda self: self.select_row_at(1, activate=True),
+        "3": lambda self: self.select_row_at(2, activate=True),
+        "4": lambda self: self.select_row_at(3, activate=True),
+        "5": lambda self: self.select_row_at(4, activate=True),
+        "6": lambda self: self.select_row_at(5, activate=True),
+        "7": lambda self: self.select_row_at(6, activate=True),
+        "8": lambda self: self.select_row_at(7, activate=True),
+        "9": lambda self: self.select_row_at(8, activate=True),
+        "0": lambda self: self.select_row_at(9, activate=True),
+        "alt+1": lambda self: self.select_row_at(0, activate=True),
+        "alt+2": lambda self: self.select_row_at(1, activate=True),
+        "alt+3": lambda self: self.select_row_at(2, activate=True),
+        "alt+4": lambda self: self.select_row_at(3, activate=True),
+        "alt+5": lambda self: self.select_row_at(4, activate=True),
+        "alt+6": lambda self: self.select_row_at(5, activate=True),
+        "alt+7": lambda self: self.select_row_at(6, activate=True),
+        "alt+8": lambda self: self.select_row_at(7, activate=True),
+        "alt+9": lambda self: self.select_row_at(8, activate=True),
+        "alt+0": lambda self: self.select_row_at(9, activate=True),
         "j": lambda self: self.set_index(self.index + 1),
         "k": lambda self: self.set_index(self.index - 1),
         "down": lambda self: self.set_index(self.index + 1),

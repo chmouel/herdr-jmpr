@@ -33,7 +33,7 @@
 | `dd` | clear the query |
 | `C` | clear the query and enter insert mode |
 | `y` | mark a tab (on a workspace row, all its tabs) |
-| `p` | paste the marked tabs here; with no marks, move the pane |
+| `p` | paste the marked tabs here and focus the moved tab; with no marks, move the pane |
 | `t` | move the tab |
 | `escape` | clear the marks; with no marks, quit |
 | `x` | close the project workspace |

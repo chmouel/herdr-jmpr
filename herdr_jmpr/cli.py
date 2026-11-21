@@ -332,10 +332,16 @@ def jump(
         raise
     fcntl.flock(handle, fcntl.LOCK_UN)
     os.close(handle)
-    herdr.workspace_focus(destination)
+    focus_workspace(herdr, destination, tab_id)
+    return 0
+
+
+def focus_workspace(herdr: Herdr, workspace_id: str, tab_id: str = "") -> None:
+    if not workspace_id:
+        return
+    herdr.workspace_focus(workspace_id)
     if tab_id:
         herdr.tab_focus(tab_id)
-    return 0
 
 
 def _safe_tabs(herdr: Herdr) -> list[dict]:
@@ -417,6 +423,7 @@ def interactive(
     mapping_reader = lambda: read_live_mapping(path, instance)  # noqa: E731
 
     result: Result | None
+    focus_after_exit: tuple[str, str] | None = None
     if backend == "fzf":
         result = run_fzf(
             paths_git=paths_git,
@@ -508,8 +515,11 @@ def interactive(
             record_workspace=record_workspace,
         )
         result = app.run()
+        focus_after_exit = app.focus_after_exit
     ignore_hangup()
     if result is None:
+        if focus_after_exit:
+            focus_workspace(herdr, *focus_after_exit)
         return 0
     return jump(result, herdr, socket, instance, path, names)
 

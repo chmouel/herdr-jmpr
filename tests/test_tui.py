@@ -1792,6 +1792,8 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
 
             self.assertEqual(app.yanked_tabs, {})
+            self.assertIsNone(app.return_value)
+            self.assertEqual(app.focus_after_exit, ("w2", "w2:t-new"))
             self.assertEqual(
                 herdr.moves,
                 [

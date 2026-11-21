@@ -507,6 +507,24 @@ class JumpTest(unittest.TestCase):
             self.run_jump(self.result(choice=("use", "gone")), fake)
         self.assertEqual(str(raised.exception), "Invalid workspace selection: gone")
 
+    def test_focus_workspace_skips_empty_workspace(self):
+        from herdr_jmpr.herdr import Herdr
+
+        fake = self.fake()
+        with mock.patch.dict(os.environ, self.environment | {"HERDR_BIN_PATH": str(fake.executable)}):
+            herdr = Herdr(str(fake.executable))
+            cli.focus_workspace(herdr, "")
+            cli.focus_workspace(herdr, "w1", "t1")
+            cli.focus_workspace(herdr, "w1")
+        self.assertEqual(
+            fake.calls(),
+            [
+                ["workspace", "focus", "w1"],
+                ["tab", "focus", "t1"],
+                ["workspace", "focus", "w1"],
+            ],
+        )
+
     def test_move_pane_creates_workspace_without_create_call(self):
         fake = self.fake()
         layout = {

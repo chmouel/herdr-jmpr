@@ -101,8 +101,9 @@ directory.
   what is running (`π` pi, `✻` Claude Code, and so on).
 - `alt+e` (or `e` in normal mode) shows or hides the tab tree. Use `←`/`→` to fold
   a workspace.
-- In normal mode, `y` marks tabs, `p` pastes them into the row under the cursor,
-  and `Esc` clears the marks. With no marks, `p` moves the pane.
+- In normal mode, `y` marks tabs, `p` pastes them into the row under the cursor
+  and jumps to the moved tab, and `Esc` clears the marks. With no marks, `p`
+  moves the pane.
 
 The full key list is in [docs/KEYS.md](docs/KEYS.md).
 

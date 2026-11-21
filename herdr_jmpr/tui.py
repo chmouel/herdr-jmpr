@@ -1147,6 +1147,7 @@ class PickerApp(App[Result | None]):
         self.show_tabs = show_tabs
         self.collapsed_paths: set[str] = set()
         self.yanked_tabs: dict[str, tuple[str, str, str]] = {}
+        self.focus_after_exit: tuple[str, str] | None = None
         self.record_workspace = record_workspace
         self.mode = start_mode if start_mode in ("insert", "normal") else "insert"
         self.query = ""
@@ -2659,6 +2660,7 @@ class PickerApp(App[Result | None]):
 
         to_move = list(self.yanked_tabs.values())
         moved_any = False
+        destination: tuple[str, str] = ("", "")
         try:
             for src_ws, tab_id, tab_label in to_move:
                 if target_ws and src_ws == target_ws:
@@ -2672,7 +2674,7 @@ class PickerApp(App[Result | None]):
                 layout = await asyncio.to_thread(
                     self.herdr.pane_layout, str(pane["pane_id"])
                 )
-                created_ws, _ = await asyncio.to_thread(
+                created_ws, new_tab = await asyncio.to_thread(
                     move_tab_layout,
                     self.herdr,
                     layout,
@@ -2681,6 +2683,7 @@ class PickerApp(App[Result | None]):
                     tab_label or "moved",
                 )
                 moved_any = True
+                destination = (created_ws or target_ws, new_tab)
                 if not target_ws and created_ws:
                     target_ws = created_ws
                     if self.record_workspace is not None:
@@ -2692,7 +2695,11 @@ class PickerApp(App[Result | None]):
             return
         self.yanked_tabs.clear()
         self.collapsed_paths.discard(target_path)
-        if moved_any:
+        if moved_any and destination[0]:
+            # Focus is applied by the caller once the picker is gone.
+            self.focus_after_exit = destination
+            self.exit(None)
+        elif moved_any:
             await self.refresh_workspace_state()
         else:
             self.set_rows()

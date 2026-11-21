@@ -1685,11 +1685,23 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(row.tab_id, "w1:t1")
             self.assertEqual(row.agents, ("pi",))
             self.assertEqual(row.tree_prefix, "")
+            self.assertIn("frontend", row.shown)
+            self.assertNotIn(str(self.root), row.shown)
             line = app.row_list._row_text(0, 90).plain
             self.assertNotIn("\u251c\u2500", line)
             self.assertNotIn("\u2514\u2500", line)
+            self.assertIn("frontend", line)
+            self.assertNotIn(str(self.root), line)
             self.assertIn("Analyze Local Changes", line)
+            self.assertIn("pi", line)
+            self.assertIn("working", line)
             self.assertIn("agents only", app._query_text(100).plain)
+
+            # A long path is ellipsised from the middle, never at the agent badge's expense.
+            narrow = app.row_list._row_text(0, 46).plain
+            self.assertIn("\u2026", narrow)
+            self.assertIn("pi", narrow)
+            self.assertIn("working", narrow)
 
             # Filtering inside the flat view still matches on the agent badge.
             app.insert_text("agent")

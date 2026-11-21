@@ -1384,7 +1384,7 @@ class PickerApp(App[Result | None]):
                 rows.append(
                     Row(
                         path=path,
-                        shown=tab.label,
+                        shown=f"{workspace_label(path, self.names)}  {tab.label}",
                         marker=" ",
                         label=workspace_label(path, self.names),
                         agents=tab.agents,

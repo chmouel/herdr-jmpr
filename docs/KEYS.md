@@ -59,4 +59,4 @@
 | `ctrl+x` | close the project's workspace |
 | `ctrl+h` | help |
 
-Mouse: click selects a row, double-click jumps.
+Mouse: click a row to jump to it.

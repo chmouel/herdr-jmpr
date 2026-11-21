@@ -621,11 +621,9 @@ class CloseTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.scope, "git")
             self.assertEqual([row.path for row in visible(app)], [self.repo, closed_dir])
 
-            # Row 1 is the live/closed divider; a click there selects nothing, row 2 selects the closed dir.
+            # Row 1 is the live/closed divider; a click there selects nothing.
             await pilot.click("#list", offset=(4, 1))
             self.assertEqual(app.index, 0)
-            await pilot.click("#list", offset=(4, 2))
-            self.assertEqual(app.filtered[app.index].path, closed_dir)
 
             # Theme picker modal previews live and reverts on Escape
             original_theme = app.theme
@@ -639,11 +637,11 @@ class CloseTest(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(app.theme, original_theme)
 
-            # Double-click on row 0 selects and accepts it
-            await pilot.click("#list", offset=(4, 0), times=2)
+            # A single click on a row selects and jumps straight to it.
+            await pilot.click("#list", offset=(4, 2))
             await pilot.pause()
         self.assertIsNotNone(app.return_value)
-        self.assertEqual(app.return_value.path, self.repo)
+        self.assertEqual(app.return_value.path, closed_dir)
 
 
 class ChoiceTest(unittest.IsolatedAsyncioTestCase):

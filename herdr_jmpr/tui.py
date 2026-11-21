@@ -745,7 +745,7 @@ class RowList(ScrollView, can_focus=False):
         if 0 <= index < len(self.rows):
             selector = getattr(self.app, "select_row_at", None)
             if callable(selector):
-                selector(index, activate=event.chain >= 2)
+                selector(index, activate=True)
 
 
 class ConfirmCloseModal(ModalScreen[bool]):

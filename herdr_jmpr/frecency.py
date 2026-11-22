@@ -200,9 +200,16 @@ def open_paths(
         workspace_id = workspace.get("workspace_id")
         label = workspace.get("label")
         mapped = saved_mapping.get(workspace_id)
-        if mapped and workspace_label(mapped, names) == label:
-            opened.add(mapped)
-            continue
+        if mapped:
+            if workspace_label(mapped, names) == label:
+                opened.add(mapped)
+                continue
+            panes_for_ws = [p.get("cwd") for p in panes if p.get("workspace_id") == workspace_id and p.get("cwd")]
+            if not any(workspace_label(cwd, names) == label for cwd in panes_for_ws):
+                import os as _os
+                if _os.path.isdir(mapped):
+                    opened.add(mapped)
+                    continue
         checkout = workspace_worktree_path(workspace)
         if checkout:
             opened.add(checkout)
@@ -305,9 +312,16 @@ def agents_by_path(
             continue
         agents = ws_agents[str(ws_id)]
         mapped = saved_mapping.get(ws_id)
-        if mapped and workspace_label(mapped, names) == label:
-            by_path.setdefault(mapped, []).extend(agents)
-            continue
+        if mapped:
+            if workspace_label(mapped, names) == label:
+                by_path.setdefault(mapped, []).extend(agents)
+                continue
+            cwds = ws_cwds.get(str(ws_id), ())
+            if not any(workspace_label(cwd, names) == label for cwd in cwds):
+                import os as _os
+                if _os.path.isdir(mapped):
+                    by_path.setdefault(mapped, []).extend(agents)
+                    continue
         checkout = workspace_worktree_path(workspace)
         if checkout:
             by_path.setdefault(checkout, []).extend(agents)
@@ -348,8 +362,17 @@ def _workspace_paths(
     if not ws_id:
         return []
     mapped = saved_mapping.get(ws_id)
-    if mapped and workspace_label(mapped, names) == label:
-        return [mapped]
+    if mapped:
+        if workspace_label(mapped, names) == label:
+            return [mapped]
+        cwds = ws_cwds.get(str(ws_id), ())
+        if not any(workspace_label(cwd, names) == label for cwd in cwds):
+            # Renamed workspace (e.g. Herdr's github_pr label): trust the
+            # saved mapping when it still exists on disk, even if no pane
+            # cwd matches the new label.
+            import os as _os
+            if _os.path.isdir(mapped):
+                return [mapped]
     checkout = workspace_worktree_path(workspace)
     if checkout:
         return [checkout]

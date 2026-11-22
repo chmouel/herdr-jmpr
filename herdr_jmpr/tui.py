@@ -555,7 +555,10 @@ class RowList(ScrollView, can_focus=False):
         line.append(" ")
 
         if row.is_tab:
-            prefix = "    " if row.flat else f"  {row.tree_prefix or TREE_LAST}"
+            if row.flat:
+                prefix = "" if width and width < 60 else "  "
+            else:
+                prefix = f"  {row.tree_prefix or TREE_LAST}"
             line.append(
                 prefix,
                 style=(
@@ -622,7 +625,7 @@ class RowList(ScrollView, can_focus=False):
                 else:
                     dot, dot_style = "", ""
                     body_style = f"bold {palette.secondary}" if keep_tokens else "bold"
-                if width and (width - prefix_width - cell_len(dot + full_badge) - 2 <= 6):
+                if width and (width - prefix_width - cell_len(dot + full_badge) - 2 <= 10):
                     compact = format_agent_badges(row.agents)
                     if dot:
                         badge_text.append(dot, style=dot_style)
@@ -634,14 +637,20 @@ class RowList(ScrollView, can_focus=False):
 
             badge_width = badge_text.cell_len
             show_badge = bool(badge_width) and (
-                not width or (width - prefix_width - badge_width - 2 > 4)
+                not width or (width - prefix_width - badge_width - 2 > 20 and (not width or width >= 55))
             )
-            if width:
-                avail = width - prefix_width - (badge_width + 2 if show_badge else 0)
-                shown_text = self._middle_truncate(
-                    shown_text, avail, palette.muted if keep_tokens else ""
-                )
-            line.append_text(shown_text)
+            if width and width < 60:
+                # On phone, let the final truncate own the ellipsis so the
+                # title can bleed into the trailing pad instead of being
+                # pre-clipped by the middle-truncation budget.
+                line.append_text(shown_text)
+            else:
+                if width:
+                    avail = width - prefix_width - (badge_width + 2 if show_badge else 0)
+                    shown_text = self._middle_truncate(
+                        shown_text, avail, palette.muted if keep_tokens else ""
+                    )
+                line.append_text(shown_text)
 
             if show_badge:
                 gap = max(2, width - line.cell_len - badge_width) if width else 2
@@ -726,7 +735,7 @@ class RowList(ScrollView, can_focus=False):
         badge_width = right_meta.cell_len
         lead = line.cell_len
         show_badge = bool(badge_width) and (
-            not width or (width - lead - badge_width - 2 > 6)
+            not width or (width - lead - badge_width - 2 > 18)
         )
         if width:
             avail = width - lead - (badge_width + 2 if show_badge else 0)
@@ -1383,7 +1392,10 @@ class PickerApp(App[Result | None]):
         """Flat list of open tabs that have an agent running."""
 
         rows: list[Row] = []
-        for path in self.active_paths():
+        # Agents view must show every tab with an agent, even if its
+        # workspace path is not in history (e.g. renamed workspaces).
+        paths = self.tabs.keys() if self.agents_only else self.active_paths()
+        for path in paths:
             for tab in self.tabs.get(path) or ():
                 if not tab.agents:
                     continue
@@ -1974,7 +1986,7 @@ class PickerApp(App[Result | None]):
         basename = os.path.basename(path.rstrip("/")) or path
         title = Text()
         title.append(basename, style=f"bold {palette.foreground}".strip() or "bold")
-        if label and label != basename:
+        if label and label != basename and width >= 45:
             title.append("  ")
             title.append(f"[{label}]", style=f"bold {palette.secondary}")
         title.truncate(width, overflow="ellipsis")
@@ -2127,13 +2139,24 @@ class PickerApp(App[Result | None]):
                         text.append_text(header)
                         text.append("\n")
                         if session.title:
-                            wrapped = self._wrap_subject(
-                                session.title, max(8, width - 2), max_lines=3
-                            )
-                            for wrapped_line in wrapped.splitlines():
+                            if width < 38:
                                 text.append("\u2502 ", style=rail_style)
-                                text.append(wrapped_line, style=palette.foreground)
+                                text.append(
+                                    self._ellipsise(
+                                        session.title, max(8, width - 2)
+                                    ),
+                                    style=palette.foreground,
+                                )
                                 text.append("\n")
+                            else:
+                                max_lines = 2 if width < 55 else 3
+                                wrapped = self._wrap_subject(
+                                    session.title, max(8, width - 2), max_lines=max_lines
+                                )
+                                for wrapped_line in wrapped.splitlines():
+                                    text.append("\u2502 ", style=rail_style)
+                                    text.append(wrapped_line, style=palette.foreground)
+                                    text.append("\n")
                 elif ws.agents:
                     agent_str = ", ".join(
                         f"{agent_icon(agent)} {agent}" for agent in ws.agents
@@ -2154,7 +2177,7 @@ class PickerApp(App[Result | None]):
             text.append("\u2500" * rule_len + "\n", style=palette.muted)
             git_header = Text()
             git_header.append(f"\u2387 {git_info.branch}", style=f"bold {palette.primary}")
-            if git_info.is_worktree:
+            if git_info.is_worktree and width >= 38:
                 git_header.append("  ")
                 git_header.append("worktree", style=palette.muted)
             counts: list[str] = []
@@ -2176,7 +2199,12 @@ class PickerApp(App[Result | None]):
             git_header.truncate(width, overflow="ellipsis")
             text.append_text(git_header)
             text.append("\n")
-            for commit in git_info.commits:
+            commits = git_info.commits
+            if width < 32:
+                commits = ()
+            elif width < 38:
+                commits = commits[:1]
+            for commit in commits:
                 commit_line = Text()
                 commit_line.append(commit.short_hash, style=f"bold {palette.secondary}")
                 commit_line.append(f" {commit.relative_age:<4} ", style=palette.muted)

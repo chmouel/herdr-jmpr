@@ -548,10 +548,15 @@ class RowList(ScrollView, can_focus=False):
 
         pointer_style = f"bold {palette.primary}" if keep_tokens else "bold"
         line.append(self.POINTER if selected else " ", style=pointer_style)
-        line.append(
-            str((index + 1) % 10) if index < 10 else " ",
-            style=palette.muted if keep_tokens else "",
-        )
+        has_tabs = any(r.is_tab for r in self.rows)
+        if row.is_tab:
+            tab_ord = sum(1 for r in self.rows[:index] if r.is_tab) + 1
+            digit = str(tab_ord % 10) if tab_ord <= 10 else " "
+        elif not has_tabs and index < 10:
+            digit = str((index + 1) % 10)
+        else:
+            digit = " "
+        line.append(digit, style=palette.muted if keep_tokens else "")
         line.append(" ")
 
         if row.is_tab:
@@ -637,9 +642,9 @@ class RowList(ScrollView, can_focus=False):
 
             badge_width = badge_text.cell_len
             show_badge = bool(badge_width) and (
-                not width or (width - prefix_width - badge_width - 2 > 20 and (not width or width >= 55))
+                not width or (width - prefix_width - badge_width - 2 > 20 and (not width or width >= 42))
             )
-            if width and width < 60:
+            if width and width < 40:
                 # On phone, let the final truncate own the ellipsis so the
                 # title can bleed into the trailing pad instead of being
                 # pre-clipped by the middle-truncation budget.
@@ -2592,6 +2597,25 @@ class PickerApp(App[Result | None]):
             available.insert(0, "herdr-ink")
         await self.push_screen_wait(ThemePickerModal(available, self.theme))
 
+    def select_tab_at(
+        self, ordinal: int, *, activate: bool = False, prefer_typed: bool = True
+    ) -> None:
+        has_tabs = any(r.is_tab for r in self.filtered)
+        if not has_tabs:
+            self.select_row_at(ordinal, activate=activate, prefer_typed=prefer_typed)
+            return
+        target = None
+        seen = 0
+        for idx, row in enumerate(self.filtered):
+            if row.is_tab:
+                if seen == ordinal:
+                    target = idx
+                    break
+                seen += 1
+        if target is None:
+            return
+        self.select_row_at(target, activate=activate, prefer_typed=prefer_typed)
+
     def select_row_at(
         self, index: int, *, activate: bool = False, prefer_typed: bool = True
     ) -> None:
@@ -2892,16 +2916,16 @@ class PickerApp(App[Result | None]):
         self.pending = character
 
     KEY_INSERT = {
-        "alt+1": lambda self: self.select_row_at(0, activate=True, prefer_typed=False),
-        "alt+2": lambda self: self.select_row_at(1, activate=True, prefer_typed=False),
-        "alt+3": lambda self: self.select_row_at(2, activate=True, prefer_typed=False),
-        "alt+4": lambda self: self.select_row_at(3, activate=True, prefer_typed=False),
-        "alt+5": lambda self: self.select_row_at(4, activate=True, prefer_typed=False),
-        "alt+6": lambda self: self.select_row_at(5, activate=True, prefer_typed=False),
-        "alt+7": lambda self: self.select_row_at(6, activate=True, prefer_typed=False),
-        "alt+8": lambda self: self.select_row_at(7, activate=True, prefer_typed=False),
-        "alt+9": lambda self: self.select_row_at(8, activate=True, prefer_typed=False),
-        "alt+0": lambda self: self.select_row_at(9, activate=True, prefer_typed=False),
+        "alt+1": lambda self: self.select_tab_at(0, activate=True, prefer_typed=False),
+        "alt+2": lambda self: self.select_tab_at(1, activate=True, prefer_typed=False),
+        "alt+3": lambda self: self.select_tab_at(2, activate=True, prefer_typed=False),
+        "alt+4": lambda self: self.select_tab_at(3, activate=True, prefer_typed=False),
+        "alt+5": lambda self: self.select_tab_at(4, activate=True, prefer_typed=False),
+        "alt+6": lambda self: self.select_tab_at(5, activate=True, prefer_typed=False),
+        "alt+7": lambda self: self.select_tab_at(6, activate=True, prefer_typed=False),
+        "alt+8": lambda self: self.select_tab_at(7, activate=True, prefer_typed=False),
+        "alt+9": lambda self: self.select_tab_at(8, activate=True, prefer_typed=False),
+        "alt+0": lambda self: self.select_tab_at(9, activate=True, prefer_typed=False),
         "down": lambda self: self.set_index(self.index + 1),
         "up": lambda self: self.set_index(self.index - 1),
         "left": lambda self: self.collapse_selected(),
@@ -2938,16 +2962,16 @@ class PickerApp(App[Result | None]):
     }
 
     KEY_NORMAL = {
-        "1": lambda self: self.select_row_at(0, activate=True, prefer_typed=False),
-        "2": lambda self: self.select_row_at(1, activate=True, prefer_typed=False),
-        "3": lambda self: self.select_row_at(2, activate=True, prefer_typed=False),
-        "4": lambda self: self.select_row_at(3, activate=True, prefer_typed=False),
-        "5": lambda self: self.select_row_at(4, activate=True, prefer_typed=False),
-        "6": lambda self: self.select_row_at(5, activate=True, prefer_typed=False),
-        "7": lambda self: self.select_row_at(6, activate=True, prefer_typed=False),
-        "8": lambda self: self.select_row_at(7, activate=True, prefer_typed=False),
-        "9": lambda self: self.select_row_at(8, activate=True, prefer_typed=False),
-        "0": lambda self: self.select_row_at(9, activate=True, prefer_typed=False),
+        "1": lambda self: self.select_tab_at(0, activate=True, prefer_typed=False),
+        "2": lambda self: self.select_tab_at(1, activate=True, prefer_typed=False),
+        "3": lambda self: self.select_tab_at(2, activate=True, prefer_typed=False),
+        "4": lambda self: self.select_tab_at(3, activate=True, prefer_typed=False),
+        "5": lambda self: self.select_tab_at(4, activate=True, prefer_typed=False),
+        "6": lambda self: self.select_tab_at(5, activate=True, prefer_typed=False),
+        "7": lambda self: self.select_tab_at(6, activate=True, prefer_typed=False),
+        "8": lambda self: self.select_tab_at(7, activate=True, prefer_typed=False),
+        "9": lambda self: self.select_tab_at(8, activate=True, prefer_typed=False),
+        "0": lambda self: self.select_tab_at(9, activate=True, prefer_typed=False),
         "alt+1": lambda self: self.select_row_at(0, activate=True, prefer_typed=False),
         "alt+2": lambda self: self.select_row_at(1, activate=True, prefer_typed=False),
         "alt+3": lambda self: self.select_row_at(2, activate=True, prefer_typed=False),

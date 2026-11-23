@@ -38,6 +38,7 @@ from .frecency import (
     format_agent_badges,
     format_tab_agent_badge,
     open_paths,
+    pane_title,
     rank_paths,
     tabs_by_path,
     workspace_worktree_path,
@@ -630,7 +631,8 @@ class RowList(ScrollView, can_focus=False):
                 else:
                     dot, dot_style = "", ""
                     body_style = f"bold {palette.secondary}" if keep_tokens else "bold"
-                if width and (width - prefix_width - cell_len(dot + full_badge) - 2 <= 10):
+                small = bool(width) and width < 60
+                if small or (width and (width - prefix_width - cell_len(dot + full_badge) - 2 <= 10)):
                     compact = format_agent_badges(row.agents)
                     if dot:
                         badge_text.append(dot, style=dot_style)
@@ -641,13 +643,17 @@ class RowList(ScrollView, can_focus=False):
                     badge_text.append(full_badge, style=body_style)
 
             badge_width = badge_text.cell_len
+            min_title = 8 if width and width < 60 else 20
             show_badge = bool(badge_width) and (
-                not width or (width - prefix_width - badge_width - 2 > 20 and (not width or width >= 42))
+                not width or width - prefix_width - badge_width - 2 > min_title
             )
             if width and width < 40:
-                # On phone, let the final truncate own the ellipsis so the
-                # title can bleed into the trailing pad instead of being
-                # pre-clipped by the middle-truncation budget.
+                # On phone, end-truncate instead of clipping the middle so
+                # the start of the title stays readable.
+                if show_badge:
+                    shown_text.truncate(
+                        width - prefix_width - badge_width - 2, overflow="ellipsis"
+                    )
                 line.append_text(shown_text)
             else:
                 if width:
@@ -2372,17 +2378,11 @@ class PickerApp(App[Result | None]):
             for pane in panes:
                 if pane.get("workspace_id") != workspace_id or pane.get("agent") is None:
                     continue
-                tokens = pane.get("tokens")
-                title = ""
-                if isinstance(tokens, dict):
-                    title = str(tokens.get("tl") or "").strip()
-                if not title:
-                    title = str(pane.get("terminal_title_stripped") or "").strip()
                 sessions.append(
                     SessionInfo(
                         agent=str(pane.get("agent")),
                         status=str(pane.get("agent_status") or "").strip(),
-                        title=title,
+                        title=pane_title(pane),
                     )
                 )
             ws_infos.append(

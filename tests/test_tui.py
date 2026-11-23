@@ -1708,11 +1708,14 @@ class TabTreeAndRankingTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("working", line)
             self.assertIn("agents only", app._query_text(100).plain)
 
-            # A long path is ellipsised from the middle, never at the agent badge's expense.
-            narrow = app.row_list._row_text(0, 46).plain
+            # Small screens keep only the status dot and agent icon; on a
+            # phone the title is ellipsised rather than the badge.
+            for small_width in (46, 30):
+                narrow = app.row_list._row_text(0, small_width).plain
+                self.assertTrue(narrow.rstrip().endswith("\u25cf \u03c0"), narrow)
+                self.assertNotIn(" pi", narrow)
+                self.assertNotIn("working", narrow)
             self.assertIn("\u2026", narrow)
-            self.assertIn("pi", narrow)
-            self.assertIn("working", narrow)
 
             # Filtering inside the flat view still matches on the agent badge.
             app.insert_text("agent")

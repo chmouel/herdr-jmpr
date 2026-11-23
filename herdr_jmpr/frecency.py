@@ -342,12 +342,41 @@ def _pick_agent_status(statuses: list[str]) -> str:
     return cleaned[0]
 
 
-def _pane_title(pane: dict) -> str:
+_TITLE_TAILS = {"GitHub Copilot"}
+
+
+def full_pane_title(pane: dict, short: str) -> str:
+    """Expand a label Herdr shortened for its sidebar from the pane's terminal title."""
+
+    if not short.endswith("\u2026"):
+        return short
+    stem = short[:-1].rstrip()
+    title = str(pane.get("terminal_title_stripped") or "").strip()
+    start = title.find(stem) if stem else -1
+    if start == -1:
+        return short
+    if start and title[start - 1] in "[(":
+        start -= 1
+    full = title[start:]
+    head, sep, tail = full.rpartition(" - ")
+    if sep and len(head) >= len(stem):
+        tails = set(_TITLE_TAILS)
+        for key in ("cwd", "foreground_cwd"):
+            cwd = str(pane.get(key) or "").rstrip("/")
+            if cwd:
+                tails.add(os.path.basename(cwd))
+        if tail.strip() in tails:
+            full = head
+    full = full.strip()
+    return full if len(full) > len(stem) else short
+
+
+def pane_title(pane: dict) -> str:
     tokens = pane.get("tokens")
     if isinstance(tokens, dict):
         title = str(tokens.get("tl") or "").strip()
         if title:
-            return title
+            return full_pane_title(pane, title)
     return str(pane.get("terminal_title_stripped") or "").strip()
 
 
@@ -444,9 +473,14 @@ def tabs_by_path(
                 )
                 agent_status = _pick_agent_status(statuses) if agents else ""
                 label = str(tab.get("label") or "").strip()
+                for pane in tab_panes:
+                    expanded = full_pane_title(pane, label)
+                    if expanded != label:
+                        label = expanded
+                        break
                 if not label:
                     for pane in tab_panes:
-                        title = _pane_title(pane)
+                        title = pane_title(pane)
                         if title:
                             label = title
                             break
@@ -488,7 +522,7 @@ def tabs_by_path(
                 agent_status = _pick_agent_status(statuses) if agents else ""
                 label = ""
                 for pane in tab_panes:
-                    title = _pane_title(pane)
+                    title = pane_title(pane)
                     if title:
                         label = title
                         break

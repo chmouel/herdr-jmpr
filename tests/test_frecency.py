@@ -314,6 +314,44 @@ class FrecencyTest(unittest.TestCase):
         )
         self.assertEqual(format_tab_agent_badge(("claude",), "idle"), "\u273b claude")
 
+    def test_tabs_by_path_expands_sidebar_truncated_labels(self):
+        repo = self.root / "liseur"
+        repo.mkdir()
+        workspaces = [{"workspace_id": "w1", "label": "liseur"}]
+        tabs = [
+            {"workspace_id": "w1", "tab_id": "w1:t1", "label": "Redesign\u2026", "number": 1},
+            {"workspace_id": "w1", "tab_id": "w1:t2", "label": "img] why so\u2026", "number": 2},
+            {"workspace_id": "w1", "tab_id": "w1:t3", "label": "Mine\u2026", "number": 3},
+        ]
+        panes = [
+            {
+                "workspace_id": "w1",
+                "tab_id": "w1:t1",
+                "cwd": str(repo),
+                "agent": "pi",
+                "terminal_title_stripped": "\u03c0 - Redesign the Edition Picker - liseur",
+            },
+            {
+                "workspace_id": "w1",
+                "tab_id": "w1:t2",
+                "cwd": str(repo),
+                "agent": "copilot",
+                "terminal_title_stripped": "[img] why so small - GitHub Copilot",
+            },
+            {
+                "workspace_id": "w1",
+                "tab_id": "w1:t3",
+                "cwd": str(repo),
+                "agent": "pi",
+                "terminal_title_stripped": "\u03c0 - Something else - liseur",
+            },
+        ]
+        result = tabs_by_path(workspaces, tabs, panes, {"w1": str(repo)}, {})
+        self.assertEqual(
+            [tab.label for tab in result[str(repo)]],
+            ["Redesign the Edition Picker", "[img] why so small", "Mine\u2026"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
